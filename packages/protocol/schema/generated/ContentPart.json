@@ -1,0 +1,29 @@
+{
+  "description": "OpenAI content part; unknown part types pass through.",
+  "type": "object",
+  "required": [
+    "type"
+  ],
+  "properties": {
+    "type": {
+      "description": "Part type, e.g. \"text\", \"image_url\".",
+      "type": "string"
+    },
+    "text": {
+      "type": "string"
+    },
+    "image_url": {
+      "type": "object",
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "$id": "ContentPart",
+  "title": "ContentPart"
+}

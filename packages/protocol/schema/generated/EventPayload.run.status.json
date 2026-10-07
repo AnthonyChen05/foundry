@@ -1,0 +1,51 @@
+{
+  "$id": "EventPayload.run.status",
+  "type": "object",
+  "required": [
+    "runId",
+    "status"
+  ],
+  "properties": {
+    "runId": {
+      "type": "string"
+    },
+    "status": {
+      "description": "Run lifecycle status.",
+      "$id": "RunStatus",
+      "anyOf": [
+        {
+          "const": "queued",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "type": "string"
+        },
+        {
+          "const": "waiting_approval",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "type": "string"
+        },
+        {
+          "const": "timeout",
+          "type": "string"
+        }
+      ]
+    },
+    "error": {
+      "type": "string"
+    }
+  },
+  "title": "EventPayload.run.status"
+}

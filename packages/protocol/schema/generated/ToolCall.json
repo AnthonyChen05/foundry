@@ -1,0 +1,35 @@
+{
+  "description": "OpenAI tool_call; `arguments` is a JSON-encoded string.",
+  "$id": "ToolCall",
+  "type": "object",
+  "required": [
+    "id",
+    "type",
+    "function"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "type": {
+      "const": "function",
+      "type": "string"
+    },
+    "function": {
+      "type": "object",
+      "required": [
+        "name",
+        "arguments"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "title": "ToolCall"
+}

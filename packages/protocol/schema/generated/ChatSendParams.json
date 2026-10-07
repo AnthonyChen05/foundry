@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "required": [
+    "chatId",
+    "content"
+  ],
+  "properties": {
+    "chatId": {
+      "type": "string"
+    },
+    "content": {
+      "type": "string"
+    },
+    "attachments": {},
+    "model": {
+      "type": "string"
+    },
+    "agent": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "toolPolicy": {}
+      }
+    }
+  },
+  "$id": "ChatSendParams",
+  "title": "ChatSendParams"
+}

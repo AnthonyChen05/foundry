@@ -1,0 +1,50 @@
+{
+  "$id": "EventPayload.run.gate_request",
+  "type": "object",
+  "required": [
+    "gateId",
+    "runId",
+    "tool",
+    "args",
+    "policy",
+    "createdAt"
+  ],
+  "properties": {
+    "gateId": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "tool": {
+      "type": "string"
+    },
+    "args": {},
+    "policy": {
+      "description": "Approval policy for a tool (P3).",
+      "anyOf": [
+        {
+          "const": "ask",
+          "type": "string"
+        },
+        {
+          "const": "always",
+          "type": "string"
+        },
+        {
+          "const": "session",
+          "type": "string"
+        },
+        {
+          "const": "deny",
+          "type": "string"
+        }
+      ]
+    },
+    "createdAt": {
+      "description": "ISO 8601.",
+      "type": "string"
+    }
+  },
+  "title": "EventPayload.run.gate_request"
+}

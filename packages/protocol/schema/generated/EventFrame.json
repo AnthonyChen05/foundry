@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "required": [
+    "type",
+    "event",
+    "channel",
+    "seq"
+  ],
+  "properties": {
+    "type": {
+      "const": "event",
+      "type": "string"
+    },
+    "event": {
+      "type": "string"
+    },
+    "channel": {
+      "description": "One of \"chat:{id}\", \"run:{id}\", \"term:{id}\", \"sys\", \"notify\".",
+      "type": "string"
+    },
+    "seq": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "payload": {}
+  },
+  "$id": "EventFrame",
+  "title": "EventFrame"
+}

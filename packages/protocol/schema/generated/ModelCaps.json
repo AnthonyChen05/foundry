@@ -1,0 +1,25 @@
+{
+  "$id": "ModelCaps",
+  "type": "object",
+  "required": [
+    "vision",
+    "tools",
+    "reasoning",
+    "json"
+  ],
+  "properties": {
+    "vision": {
+      "type": "boolean"
+    },
+    "tools": {
+      "type": "boolean"
+    },
+    "reasoning": {
+      "type": "boolean"
+    },
+    "json": {
+      "type": "boolean"
+    }
+  },
+  "title": "ModelCaps"
+}

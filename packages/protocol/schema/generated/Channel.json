@@ -1,0 +1,6 @@
+{
+  "description": "One of \"chat:{id}\", \"run:{id}\", \"term:{id}\", \"sys\", \"notify\".",
+  "type": "string",
+  "$id": "Channel",
+  "title": "Channel"
+}

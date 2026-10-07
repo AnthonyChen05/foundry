@@ -1,0 +1,20 @@
+{
+  "$id": "ResumeEntry",
+  "type": "object",
+  "required": [
+    "channel",
+    "lastSeq"
+  ],
+  "properties": {
+    "channel": {
+      "description": "One of \"chat:{id}\", \"run:{id}\", \"term:{id}\", \"sys\", \"notify\".",
+      "type": "string"
+    },
+    "lastSeq": {
+      "minimum": -1,
+      "description": "Server replays events with seq > lastSeq (ring buffer 500/channel).",
+      "type": "integer"
+    }
+  },
+  "title": "ResumeEntry"
+}

@@ -1,0 +1,116 @@
+{
+  "description": "Canonical OpenAI ChatCompletionMessage (ADR-002). Unknown fields pass through.",
+  "$id": "Message",
+  "type": "object",
+  "required": [
+    "role",
+    "content"
+  ],
+  "properties": {
+    "role": {
+      "description": "Canonical OpenAI message role.",
+      "anyOf": [
+        {
+          "const": "system",
+          "type": "string"
+        },
+        {
+          "const": "user",
+          "type": "string"
+        },
+        {
+          "const": "assistant",
+          "type": "string"
+        },
+        {
+          "const": "tool",
+          "type": "string"
+        }
+      ]
+    },
+    "content": {
+      "description": "Text content or content-parts array.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "description": "OpenAI content part; unknown part types pass through.",
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "description": "Part type, e.g. \"text\", \"image_url\".",
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "image_url": {
+                "type": "object",
+                "required": [
+                  "url"
+                ],
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "tool_calls": {
+      "description": "Present on assistant messages requesting tool execution.",
+      "type": "array",
+      "items": {
+        "description": "OpenAI tool_call; `arguments` is a JSON-encoded string.",
+        "$id": "ToolCall",
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "function"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "const": "function",
+            "type": "string"
+          },
+          "function": {
+            "type": "object",
+            "required": [
+              "name",
+              "arguments"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "arguments": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "tool_call_id": {
+      "description": "Present on tool-role messages.",
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    }
+  },
+  "title": "Message"
+}

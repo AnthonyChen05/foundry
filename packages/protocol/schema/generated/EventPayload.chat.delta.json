@@ -1,0 +1,17 @@
+{
+  "$id": "EventPayload.chat.delta",
+  "type": "object",
+  "required": [
+    "runId",
+    "delta"
+  ],
+  "properties": {
+    "runId": {
+      "type": "string"
+    },
+    "delta": {
+      "type": "string"
+    }
+  },
+  "title": "EventPayload.chat.delta"
+}

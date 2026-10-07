@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "required": [
+    "type",
+    "id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "type": {
+      "const": "req",
+      "type": "string"
+    },
+    "id": {
+      "description": "Client-generated correlation id (uuid).",
+      "type": "string"
+    },
+    "method": {
+      "type": "string"
+    },
+    "params": {},
+    "idem": {
+      "description": "Idempotency key.",
+      "type": "string"
+    }
+  },
+  "$id": "ReqFrame",
+  "title": "ReqFrame"
+}

@@ -1,0 +1,19 @@
+{
+  "$id": "EventPayload.run.tool_result",
+  "type": "object",
+  "required": [
+    "callId",
+    "result",
+    "ok"
+  ],
+  "properties": {
+    "callId": {
+      "type": "string"
+    },
+    "result": {},
+    "ok": {
+      "type": "boolean"
+    }
+  },
+  "title": "EventPayload.run.tool_result"
+}

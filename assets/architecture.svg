@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 840" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5b6b84"/>
+    </marker>
+  </defs>
+  <style>
+    .box { fill:#161b22; stroke:#30363d; stroke-width:1.5; }
+    .title { font-size:15px; font-weight:700; }
+    .t { font-size:12px; fill:#9aa7b8; }
+    .arrow { stroke:#5b6b84; stroke-width:1.5; fill:none; }
+    .lbl { font-size:11px; fill:#8b98ab; paint-order:stroke; stroke:#0d1117; stroke-width:4px; stroke-linejoin:round; }
+  </style>
+
+  <rect width="1240" height="840" fill="#0d1117"/>
+  <text x="40" y="34" font-size="18" font-weight="700" fill="#e6edf3">LLM Backend — System Architecture (v0)</text>
+
+  <!-- Clients -->
+  <rect class="box" x="40" y="52" width="340" height="84" rx="10" stroke="#58a6ff"/>
+  <text class="title" x="56" y="82" fill="#58a6ff">ANDROID APP</text>
+  <text class="t" x="56" y="106">Kotlin + Compose (or Flutter) · ntfy push</text>
+
+  <rect class="box" x="420" y="52" width="340" height="84" rx="10" stroke="#58a6ff"/>
+  <text class="title" x="436" y="82" fill="#58a6ff">WINDOWS APP</text>
+  <text class="t" x="436" y="106">Tauri — reuses webapp UI</text>
+
+  <rect class="box" x="800" y="52" width="400" height="84" rx="10" stroke="#58a6ff"/>
+  <text class="title" x="816" y="82" fill="#58a6ff">SELF-HOSTED WEB APP</text>
+  <text class="t" x="816" y="106">SvelteKit + xterm.js · Open WebUI stopgap</text>
+
+  <!-- client arrows -->
+  <line class="arrow" x1="210" y1="136" x2="280" y2="184" marker-end="url(#arr)"/>
+  <line class="arrow" x1="600" y1="136" x2="340" y2="184" marker-end="url(#arr)"/>
+  <line class="arrow" x1="1000" y1="136" x2="480" y2="184" marker-end="url(#arr)"/>
+
+  <!-- Gateway -->
+  <rect class="box" x="40" y="184" width="540" height="140" rx="10" stroke="#d2a8ff"/>
+  <text class="title" x="56" y="214" fill="#d2a8ff">GATEWAY &amp; WS HUB</text>
+  <text class="t" x="56" y="238">REST /v1/chat/completions + /v1/models</text>
+  <text class="t" x="56" y="256">OpenAI-compatible → any client plugs in day 1</text>
+  <text class="t" x="56" y="274">WS hub: chat · run events · PTY · approvals</text>
+  <text class="t" x="56" y="292">auth (keys + sessions) · push via ntfy</text>
+
+  <!-- gateway → agent / provider -->
+  <line class="arrow" x1="300" y1="324" x2="240" y2="364" marker-end="url(#arr)"/>
+  <line class="arrow" x1="440" y1="324" x2="650" y2="364" marker-end="url(#arr)"/>
+
+  <!-- Agent runtime -->
+  <rect class="box" x="40" y="364" width="420" height="230" rx="10" stroke="#3fb950"/>
+  <text class="title" x="56" y="394" fill="#3fb950">AGENT RUNTIME</text>
+  <text class="t" x="56" y="418">canonical loop: plan → act → observe → repeat</text>
+  <text class="t" x="56" y="436">budgets: steps · tokens · cost · wall clock</text>
+  <text class="t" x="56" y="454">approval gates: ask / always / session</text>
+  <text class="t" x="56" y="472">runs = resumable, append-only event logs</text>
+  <text class="t" x="56" y="490">schedules (cron) + webhook triggers</text>
+  <text class="t" x="56" y="508">long-term memory (sqlite-vec)</text>
+  <text class="t" x="56" y="526">sub-agents · MCP client</text>
+
+  <!-- Provider layer -->
+  <rect class="box" x="480" y="364" width="360" height="230" rx="10" stroke="#f0883e"/>
+  <text class="title" x="496" y="394" fill="#f0883e">PROVIDER LAYER</text>
+  <text class="t" x="496" y="418">OpenAI-compatible adapters</text>
+  <text class="t" x="496" y="436">(Ollama · vLLM · OpenRouter · LM Studio…)</text>
+  <text class="t" x="496" y="454">Anthropic ⇄ OpenAI translation shim</text>
+  <text class="t" x="496" y="472">routing rules + failover chains</text>
+  <text class="t" x="496" y="490">key vault (encrypted at rest)</text>
+  <text class="t" x="496" y="508">usage metering + cost tracking</text>
+
+  <!-- Providers -->
+  <rect class="box" x="880" y="364" width="320" height="230" rx="10" stroke="#6e7681"/>
+  <text class="title" x="896" y="394" fill="#e6edf3">PROVIDERS</text>
+  <text class="t" x="896" y="418">anything OpenAI-compatible:</text>
+  <text class="t" x="896" y="436">Ollama — Jetson Orin Nano</text>
+  <text class="t" x="896" y="454">LM Studio · vLLM</text>
+  <text class="t" x="896" y="472">OpenRouter · Groq</text>
+  <text class="t" x="896" y="490">OpenAI · Anthropic · Google</text>
+  <text class="t" x="896" y="508">models stay OUT of the backend</text>
+
+  <!-- horizontal flows -->
+  <line class="arrow" x1="462" y1="479" x2="478" y2="479" marker-end="url(#arr)"/>
+  <line class="arrow" x1="842" y1="479" x2="878" y2="479" marker-end="url(#arr)"/>
+
+  <!-- bottom arrows -->
+  <line class="arrow" x1="220" y1="594" x2="220" y2="634" marker-end="url(#arr)"/>
+  <text class="lbl" x="230" y="618">shell / file tools</text>
+
+  <line class="arrow" x1="455" y1="594" x2="560" y2="634" marker-end="url(#arr)"/>
+  <text class="lbl" x="490" y="600">MCP client</text>
+
+  <line class="arrow" x1="700" y1="594" x2="900" y2="634" marker-end="url(#arr)"/>
+  <text class="lbl" x="770" y="604">runs + usage ledger</text>
+
+  <!-- Sandbox -->
+  <rect class="box" x="40" y="634" width="380" height="160" rx="10" stroke="#39c5cf"/>
+  <text class="title" x="56" y="664" fill="#39c5cf">SANDBOX / VM LAYER</text>
+  <text class="t" x="56" y="686">driver interface (swappable)</text>
+  <text class="t" x="56" y="704">driver 1: Open Terminal container (MIT)</text>
+  <text class="t" x="56" y="722">driver 2: raw Docker (Firecracker later)</text>
+  <text class="t" x="56" y="740">PTY terminal ↔ xterm.js in clients</text>
+  <text class="t" x="56" y="758">/workspace bind mount + snapshots</text>
+  <text class="t" x="56" y="776">egress only via gateway proxy (scoped tokens)</text>
+
+  <!-- MCP -->
+  <rect class="box" x="440" y="634" width="280" height="160" rx="10" stroke="#e3b341"/>
+  <text class="title" x="456" y="664" fill="#e3b341">MCP TOOL SERVERS</text>
+  <text class="t" x="456" y="686">stdio + streamable HTTP</text>
+  <text class="t" x="456" y="704">Scarlet MCP · searxng · github…</text>
+  <text class="t" x="456" y="722">plug into the agent tool registry</text>
+
+  <!-- Persistence -->
+  <rect class="box" x="740" y="634" width="460" height="160" rx="10" stroke="#f85149"/>
+  <text class="title" x="756" y="664" fill="#f85149">PERSISTENCE</text>
+  <text class="t" x="756" y="686">SQLite (WAL): chats · runs · events · schedules</text>
+  <text class="t" x="756" y="704">keys · settings · usage ledger</text>
+  <text class="t" x="756" y="722">blobs: content-addressed file store</text>
+  <text class="t" x="756" y="740">sqlite-vec: long-term memory + RAG</text>
+
+  <text x="40" y="826" font-size="12" font-style="italic" fill="#6e7681">Start as a modular monolith (one Node service + sidecar sandbox containers). Split into services only when it hurts.</text>
+</svg>

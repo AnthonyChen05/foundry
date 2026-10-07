@@ -1,0 +1,28 @@
+{
+  "$id": "FileEntry",
+  "type": "object",
+  "required": [
+    "path",
+    "size",
+    "mtime",
+    "isDir"
+  ],
+  "properties": {
+    "path": {
+      "description": "Workspace-relative path.",
+      "type": "string"
+    },
+    "size": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "mtime": {
+      "description": "ISO 8601.",
+      "type": "string"
+    },
+    "isDir": {
+      "type": "boolean"
+    }
+  },
+  "title": "FileEntry"
+}

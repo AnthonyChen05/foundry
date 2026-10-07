@@ -1,0 +1,23 @@
+{
+  "description": "Which first-party client is connecting.",
+  "anyOf": [
+    {
+      "const": "android",
+      "type": "string"
+    },
+    {
+      "const": "windows",
+      "type": "string"
+    },
+    {
+      "const": "web",
+      "type": "string"
+    },
+    {
+      "const": "cli",
+      "type": "string"
+    }
+  ],
+  "$id": "ClientKind",
+  "title": "ClientKind"
+}

@@ -1,0 +1,22 @@
+{
+  "$id": "ConnectSnapshot",
+  "type": "object",
+  "required": [
+    "activeRuns",
+    "unread"
+  ],
+  "properties": {
+    "activeRuns": {
+      "description": "Channel ids with live runs.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unread": {
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "title": "ConnectSnapshot"
+}

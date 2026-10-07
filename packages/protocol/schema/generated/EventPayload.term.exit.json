@@ -1,0 +1,14 @@
+{
+  "$id": "EventPayload.term.exit",
+  "type": "object",
+  "required": [
+    "code"
+  ],
+  "properties": {
+    "code": {
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "title": "EventPayload.term.exit"
+}

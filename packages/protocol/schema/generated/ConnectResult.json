@@ -1,0 +1,66 @@
+{
+  "$id": "ConnectResult",
+  "type": "object",
+  "required": [
+    "sessionId",
+    "protocol",
+    "features",
+    "snapshot"
+  ],
+  "properties": {
+    "sessionId": {
+      "description": "Opaque session id, \"s_\"-prefixed.",
+      "type": "string"
+    },
+    "protocol": {
+      "const": 0,
+      "type": "number"
+    },
+    "features": {
+      "$id": "ServerFeatures",
+      "type": "object",
+      "required": [
+        "methods",
+        "events"
+      ],
+      "properties": {
+        "methods": {
+          "description": "Method names this server supports.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "events": {
+          "description": "Event names this server emits.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "snapshot": {
+      "$id": "ConnectSnapshot",
+      "type": "object",
+      "required": [
+        "activeRuns",
+        "unread"
+      ],
+      "properties": {
+        "activeRuns": {
+          "description": "Channel ids with live runs.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unread": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      }
+    }
+  },
+  "title": "ConnectResult"
+}

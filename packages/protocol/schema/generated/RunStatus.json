@@ -1,0 +1,35 @@
+{
+  "description": "Run lifecycle status.",
+  "$id": "RunStatus",
+  "anyOf": [
+    {
+      "const": "queued",
+      "type": "string"
+    },
+    {
+      "const": "running",
+      "type": "string"
+    },
+    {
+      "const": "waiting_approval",
+      "type": "string"
+    },
+    {
+      "const": "done",
+      "type": "string"
+    },
+    {
+      "const": "failed",
+      "type": "string"
+    },
+    {
+      "const": "cancelled",
+      "type": "string"
+    },
+    {
+      "const": "timeout",
+      "type": "string"
+    }
+  ],
+  "title": "RunStatus"
+}

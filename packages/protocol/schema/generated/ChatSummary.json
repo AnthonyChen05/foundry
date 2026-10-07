@@ -1,0 +1,30 @@
+{
+  "$id": "ChatSummary",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "createdAt": {
+      "description": "ISO 8601.",
+      "type": "string"
+    },
+    "updatedAt": {
+      "description": "ISO 8601.",
+      "type": "string"
+    }
+  },
+  "title": "ChatSummary"
+}

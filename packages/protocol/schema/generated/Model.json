@@ -1,0 +1,64 @@
+{
+  "$id": "Model",
+  "type": "object",
+  "required": [
+    "id",
+    "provider",
+    "name",
+    "caps",
+    "context",
+    "enabled"
+  ],
+  "properties": {
+    "id": {
+      "description": "Catalog id \"<provider>/<model>\", e.g. \"ollama/llama3.1:8b\".",
+      "type": "string"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "caps": {
+      "$id": "ModelCaps",
+      "type": "object",
+      "required": [
+        "vision",
+        "tools",
+        "reasoning",
+        "json"
+      ],
+      "properties": {
+        "vision": {
+          "type": "boolean"
+        },
+        "tools": {
+          "type": "boolean"
+        },
+        "reasoning": {
+          "type": "boolean"
+        },
+        "json": {
+          "type": "boolean"
+        }
+      }
+    },
+    "context": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "priceInPerMtok": {
+      "minimum": 0,
+      "type": "number"
+    },
+    "priceOutPerMtok": {
+      "minimum": 0,
+      "type": "number"
+    },
+    "enabled": {
+      "type": "boolean"
+    }
+  },
+  "title": "Model"
+}

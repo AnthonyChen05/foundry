@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# foundry state (db, blobs, workspaces, vault test artifacts)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# environment
+.env
+
+# agent working memory (not part of the codebase)
+memory/
+
+# editor/os
+.DS_Store
+Thumbs.db

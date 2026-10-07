@@ -1,0 +1,29 @@
+{
+  "$id": "RunBudgets",
+  "type": "object",
+  "required": [
+    "maxSteps",
+    "maxTokens",
+    "maxCostUsd",
+    "maxWallMs"
+  ],
+  "properties": {
+    "maxSteps": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "maxTokens": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "maxCostUsd": {
+      "minimum": 0,
+      "type": "number"
+    },
+    "maxWallMs": {
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "title": "RunBudgets"
+}

@@ -1,0 +1,19 @@
+{
+  "$id": "AuthLoginResult",
+  "type": "object",
+  "required": [
+    "sessionToken",
+    "expiresAt"
+  ],
+  "properties": {
+    "sessionToken": {
+      "description": "Opaque; pass in connect.params.auth.token.",
+      "type": "string"
+    },
+    "expiresAt": {
+      "description": "ISO 8601.",
+      "type": "string"
+    }
+  },
+  "title": "AuthLoginResult"
+}

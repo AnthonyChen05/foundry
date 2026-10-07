@@ -1,0 +1,126 @@
+{
+  "$id": "Run",
+  "type": "object",
+  "required": [
+    "id",
+    "trigger",
+    "status",
+    "model",
+    "budgets",
+    "createdAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "conversationId": {
+      "type": "string"
+    },
+    "trigger": {
+      "description": "What started the run.",
+      "$id": "RunTrigger",
+      "anyOf": [
+        {
+          "const": "chat",
+          "type": "string"
+        },
+        {
+          "const": "schedule",
+          "type": "string"
+        },
+        {
+          "const": "webhook",
+          "type": "string"
+        },
+        {
+          "const": "manual",
+          "type": "string"
+        }
+      ]
+    },
+    "status": {
+      "description": "Run lifecycle status.",
+      "$id": "RunStatus",
+      "anyOf": [
+        {
+          "const": "queued",
+          "type": "string"
+        },
+        {
+          "const": "running",
+          "type": "string"
+        },
+        {
+          "const": "waiting_approval",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "type": "string"
+        },
+        {
+          "const": "timeout",
+          "type": "string"
+        }
+      ]
+    },
+    "model": {
+      "type": "string"
+    },
+    "budgets": {
+      "$id": "RunBudgets",
+      "type": "object",
+      "required": [
+        "maxSteps",
+        "maxTokens",
+        "maxCostUsd",
+        "maxWallMs"
+      ],
+      "properties": {
+        "maxSteps": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maxTokens": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxCostUsd": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "maxWallMs": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      }
+    },
+    "createdAt": {
+      "description": "ISO 8601.",
+      "type": "string"
+    },
+    "startedAt": {
+      "description": "ISO 8601.",
+      "type": "string"
+    },
+    "endedAt": {
+      "description": "ISO 8601.",
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "error": {
+      "type": "string"
+    }
+  },
+  "title": "Run"
+}

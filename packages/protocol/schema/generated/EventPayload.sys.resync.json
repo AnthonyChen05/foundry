@@ -1,0 +1,11 @@
+{
+  "$id": "EventPayload.sys.resync",
+  "type": "object",
+  "properties": {
+    "reason": {
+      "description": "Machine-readable reason, e.g. \"gap_exceeds_buffer\".",
+      "type": "string"
+    }
+  },
+  "title": "EventPayload.sys.resync"
+}

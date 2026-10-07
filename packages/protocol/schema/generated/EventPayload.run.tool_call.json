@@ -1,0 +1,28 @@
+{
+  "$id": "EventPayload.run.tool_call",
+  "type": "object",
+  "required": [
+    "call"
+  ],
+  "properties": {
+    "call": {
+      "$id": "ToolCallRef",
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "args"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "args": {}
+      }
+    }
+  },
+  "title": "EventPayload.run.tool_call"
+}

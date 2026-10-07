@@ -1,0 +1,25 @@
+{
+  "$id": "ServerFeatures",
+  "type": "object",
+  "required": [
+    "methods",
+    "events"
+  ],
+  "properties": {
+    "methods": {
+      "description": "Method names this server supports.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "events": {
+      "description": "Event names this server emits.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "title": "ServerFeatures"
+}

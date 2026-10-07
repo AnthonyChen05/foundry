@@ -1,0 +1,35 @@
+{
+  "$id": "EventPayload.run.gate_resolved",
+  "type": "object",
+  "required": [
+    "gateId",
+    "approved",
+    "scope"
+  ],
+  "properties": {
+    "gateId": {
+      "type": "string"
+    },
+    "approved": {
+      "type": "boolean"
+    },
+    "scope": {
+      "description": "Scope of an approval: this call, this session, or forever.",
+      "anyOf": [
+        {
+          "const": "once",
+          "type": "string"
+        },
+        {
+          "const": "session",
+          "type": "string"
+        },
+        {
+          "const": "always",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "title": "EventPayload.run.gate_resolved"
+}

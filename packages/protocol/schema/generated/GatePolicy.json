@@ -1,0 +1,23 @@
+{
+  "description": "Approval policy for a tool (P3).",
+  "anyOf": [
+    {
+      "const": "ask",
+      "type": "string"
+    },
+    {
+      "const": "always",
+      "type": "string"
+    },
+    {
+      "const": "session",
+      "type": "string"
+    },
+    {
+      "const": "deny",
+      "type": "string"
+    }
+  ],
+  "$id": "GatePolicy",
+  "title": "GatePolicy"
+}

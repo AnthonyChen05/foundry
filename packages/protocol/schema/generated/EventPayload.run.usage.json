@@ -1,0 +1,29 @@
+{
+  "$id": "EventPayload.run.usage",
+  "type": "object",
+  "required": [
+    "promptTokens",
+    "completionTokens",
+    "costEst",
+    "latencyMs"
+  ],
+  "properties": {
+    "promptTokens": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "completionTokens": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "costEst": {
+      "minimum": 0,
+      "type": "number"
+    },
+    "latencyMs": {
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "title": "EventPayload.run.usage"
+}

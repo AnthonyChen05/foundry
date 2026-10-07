@@ -1,0 +1,36 @@
+{
+  "name": "@foundry/core",
+  "version": "0.0.1",
+  "description": "Foundry core: gateway, providers, agent runtime, sandbox, storage (the monolith)",
+  "type": "module",
+  "main": "./dist/main.js",
+  "exports": {
+    ".": "./dist/main.js",
+    "./config": "./dist/config.js",
+    "./db": "./dist/db/open.js",
+    "./vault": "./dist/vault/vault.js",
+    "./runtime": "./dist/runtime.js"
+  },
+  "scripts": {
+    "dev": "node --import tsx --env-file-if-exists=../../.env --watch src/main.ts",
+    "start": "tsx --env-file-if-exists=../../.env src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@fastify/websocket": "^11.0.0",
+    "@foundry/protocol": "workspace:*",
+    "@sinclair/typebox": "^0.34.0",
+    "better-sqlite3": "^12.0.0",
+    "drizzle-orm": "^0.44.0",
+    "fastify": "^5.0.0",
+    "pino": "^9.0.0",
+    "sqlite-vec": "^0.1.6"
+  },
+  "devDependencies": {
+    "@foundry/sdk-ts": "workspace:*",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0"
+  }
+}

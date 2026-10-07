@@ -1,0 +1,17 @@
+{
+  "$id": "EventPayload.term.data",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "description": "Terminal bytes as text, or base64 when b64.",
+      "type": "string"
+    },
+    "b64": {
+      "type": "boolean"
+    }
+  },
+  "title": "EventPayload.term.data"
+}

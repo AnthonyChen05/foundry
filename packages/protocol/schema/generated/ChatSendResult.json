@@ -1,0 +1,16 @@
+{
+  "$id": "ChatSendResult",
+  "type": "object",
+  "required": [
+    "runId"
+  ],
+  "properties": {
+    "runId": {
+      "type": "string"
+    },
+    "conversationId": {
+      "type": "string"
+    }
+  },
+  "title": "ChatSendResult"
+}

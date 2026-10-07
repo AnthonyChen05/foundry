@@ -1,0 +1,54 @@
+{
+  "$id": "ProtocolError",
+  "type": "object",
+  "required": [
+    "code",
+    "message"
+  ],
+  "properties": {
+    "code": {
+      "description": "Protocol error codes (§1.1).",
+      "anyOf": [
+        {
+          "const": "bad_request",
+          "type": "string"
+        },
+        {
+          "const": "unauthorized",
+          "type": "string"
+        },
+        {
+          "const": "not_found",
+          "type": "string"
+        },
+        {
+          "const": "denied",
+          "type": "string"
+        },
+        {
+          "const": "gate_timeout",
+          "type": "string"
+        },
+        {
+          "const": "provider_error",
+          "type": "string"
+        },
+        {
+          "const": "capacity",
+          "type": "string"
+        },
+        {
+          "const": "internal",
+          "type": "string"
+        }
+      ]
+    },
+    "message": {
+      "type": "string"
+    },
+    "retryable": {
+      "type": "boolean"
+    }
+  },
+  "title": "ProtocolError"
+}

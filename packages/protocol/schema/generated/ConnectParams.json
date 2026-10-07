@@ -1,0 +1,84 @@
+{
+  "$id": "ConnectParams",
+  "type": "object",
+  "required": [
+    "protocol",
+    "auth",
+    "client"
+  ],
+  "properties": {
+    "protocol": {
+      "minimum": 0,
+      "description": "Must equal PROTOCOL_VERSION exactly (§5).",
+      "type": "integer"
+    },
+    "auth": {
+      "type": "object",
+      "required": [
+        "token"
+      ],
+      "properties": {
+        "token": {
+          "type": "string"
+        }
+      }
+    },
+    "client": {
+      "type": "object",
+      "required": [
+        "kind",
+        "version"
+      ],
+      "properties": {
+        "kind": {
+          "description": "Which first-party client is connecting.",
+          "anyOf": [
+            {
+              "const": "android",
+              "type": "string"
+            },
+            {
+              "const": "windows",
+              "type": "string"
+            },
+            {
+              "const": "web",
+              "type": "string"
+            },
+            {
+              "const": "cli",
+              "type": "string"
+            }
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "resume": {
+      "description": "Per-channel replay cursors from lastSeq+1.",
+      "type": "array",
+      "items": {
+        "$id": "ResumeEntry",
+        "type": "object",
+        "required": [
+          "channel",
+          "lastSeq"
+        ],
+        "properties": {
+          "channel": {
+            "description": "One of \"chat:{id}\", \"run:{id}\", \"term:{id}\", \"sys\", \"notify\".",
+            "type": "string"
+          },
+          "lastSeq": {
+            "minimum": -1,
+            "description": "Server replays events with seq > lastSeq (ring buffer 500/channel).",
+            "type": "integer"
+          }
+        }
+      }
+    }
+  },
+  "title": "ConnectParams"
+}

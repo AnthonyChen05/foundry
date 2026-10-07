@@ -1,0 +1,20 @@
+{
+  "$id": "EventPayload.notify.push",
+  "type": "object",
+  "required": [
+    "title",
+    "body"
+  ],
+  "properties": {
+    "title": {
+      "type": "string"
+    },
+    "body": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    }
+  },
+  "title": "EventPayload.notify.push"
+}

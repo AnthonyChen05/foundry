@@ -1,0 +1,23 @@
+{
+  "description": "What started the run.",
+  "$id": "RunTrigger",
+  "anyOf": [
+    {
+      "const": "chat",
+      "type": "string"
+    },
+    {
+      "const": "schedule",
+      "type": "string"
+    },
+    {
+      "const": "webhook",
+      "type": "string"
+    },
+    {
+      "const": "manual",
+      "type": "string"
+    }
+  ],
+  "title": "RunTrigger"
+}

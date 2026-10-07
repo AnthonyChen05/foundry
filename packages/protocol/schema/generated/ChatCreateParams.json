@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    }
+  },
+  "$id": "ChatCreateParams",
+  "title": "ChatCreateParams"
+}
