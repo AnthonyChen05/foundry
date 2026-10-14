@@ -2,3 +2,4 @@ packages:
   - packages/protocol
   - packages/sdk-ts
   - apps/core
+  - apps/web

@@ -1,0 +1,51 @@
+/**
+ * Wire types re-exported from `@foundry/protocol` — the single source of
+ * truth (CLAUDE.md). The SDK never redefines a shape; frontends import these
+ * from `@foundry/sdk-ts` so every client compiles against the same contract.
+ */
+export type {
+  ChatCreateParams,
+  ChatHistoryParams,
+  ChatSendParams,
+  ChatSendResult,
+  ChatSummary,
+  ConnectResult,
+  FileEntry,
+  FilesListParams,
+  FilesMkdirParams,
+  FilesPathParams,
+  FilesReadParams,
+  FilesReadResult,
+  FilesRmParams,
+  FilesWriteParams,
+  Gate,
+  GatePolicy,
+  GateState,
+  Hook,
+  HookCreateParams,
+  HookPayload,
+  Message,
+  Model,
+  ModelCaps,
+  Run,
+  RunApproveParams,
+  RunBudgets,
+  RunCancelParams,
+  RunEventItem,
+  RunGetParams,
+  RunStatus,
+  RunTrigger,
+  Schedule,
+  ScheduleCreateParams,
+  ScheduleKind,
+  SchedulePatchParams,
+  TermCloseParams,
+  TermInputParams,
+  TermOpenParams,
+  TermOpenResult,
+  TermResizeParams,
+  ToolCall,
+  ResumeEntry,
+} from "@foundry/protocol";
+
+export { PROTOCOL_VERSION } from "@foundry/protocol";

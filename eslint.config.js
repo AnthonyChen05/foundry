@@ -8,6 +8,10 @@ export default tseslint.config(
       "**/node_modules/**",
       "**/drizzle/**",
       "packages/protocol/schema/**",
+      // P4 web app build outputs (generated) — eslint has no .svelte parser.
+      "apps/web/.svelte-kit/**",
+      "apps/web/build/**",
+      "**/*.svelte",
     ],
   },
   js.configs.recommended,

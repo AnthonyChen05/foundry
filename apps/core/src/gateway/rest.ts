@@ -1,13 +1,27 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { PassThrough } from "node:stream";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { Value } from "@sinclair/typebox/value";
-import { MessageSchema } from "@foundry/protocol";
-import type { Message } from "@foundry/protocol";
+import {
+  HookCreateParamsSchema,
+  HookPayloadSchema,
+  ScheduleCreateParamsSchema,
+  SchedulePatchParamsSchema,
+  MessageSchema,
+} from "@foundry/protocol";
+import type { HookCreateParams, HookPayload, ScheduleCreateParams, SchedulePatchParams, Message } from "@foundry/protocol";
 import type { AuthService, IssuedKey } from "../auth/auth.js";
 import type { ChatService } from "./chat.js";
 import type { ProviderStore } from "../providers/store.js";
 import type { ToolChoice, ToolDefinition } from "../providers/types.js";
 import { ProviderError } from "../providers/types.js";
 import type { ChatChunk, Usage } from "../providers/types.js";
+import type { McpManager } from "../agent/mcp.js";
+import { McpServerSchema, type McpServer } from "../agent/mcp.js";
+import type { SchedulerService } from "../agent/schedules.js";
+import type { HookService } from "./hooks.js";
+import { isSpaPath } from "./web.js";
 
 /**
  * REST plane (protocol.md §2): OpenAI-compatible /v1 + auth + admin. Bearer
@@ -18,6 +32,8 @@ import type { ChatChunk, Usage } from "../providers/types.js";
 
 interface AuthedRequest extends FastifyRequest {
   user?: { userId: string };
+  /** Raw request bytes, tee'd in preParsing (webhook HMAC plane only). */
+  rawBody?: Buffer;
 }
 
 /* OpenAI-shaped error body; `type` is derived from the status per their taxonomy
@@ -39,13 +55,29 @@ export interface RestDeps {
   version: string;
   /** Event router (hub.publish) — REST runs broadcast to WS clients too. */
   emit?: (event: string, channel: string, payload: unknown) => void;
+  /** MCP client manager (P2 admin endpoints; undefined → endpoints report down). */
+  mcp?: McpManager;
+  /** Fired when the admin PUT replaces the MCP server list. */
+  onMcpServersChanged?: () => void;
+  /** Schedule triggers (P3 admin plane; undefined → endpoints report down). */
+  schedules?: SchedulerService;
+  /** Webhook triggers (P3 trigger + admin plane; undefined → endpoints report down). */
+  hooks?: HookService;
 }
 
 export function registerRest(app: FastifyInstance, deps: RestDeps): void {
   // Auth gate. WS (/ws) authenticates inside the connect frame instead.
   app.addHook("onRequest", async (request, reply) => {
     const path = request.routeOptions.url ?? request.url.split("?")[0] ?? "";
-    if (path === "/healthz" || path === "/readyz" || path === "/v1/auth/login" || path === "/ws") return;
+    // P4: when the SPA is served, its files (and unmatched deep links) are
+    // public by design — the shell carries no secrets; login must work.
+    if (isSpaPath(app, request.method, request.url.split("?")[0] ?? "/")) return;
+    if (path === "/healthz" || path === "/readyz" || path === "/v1/auth/login" || path === "/ws" || path === "/term") return;
+    // Egress plane self-authenticates with scoped sandbox tokens (ADR-005, not user keys).
+    if (path.startsWith("/v1/egress/") || path === "/v1/egress") return;
+    // Webhook trigger plane (P3): HMAC-signed with a dedicated secret — no
+    // bearer key, on purpose (give one to a cron service without a Foundry key).
+    if (path.startsWith("/hook/")) return;
     const header = request.headers.authorization ?? "";
     const match = /^Bearer (.+)$/.exec(header);
     const token = match?.[1];
@@ -57,7 +89,39 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
     (request as AuthedRequest).user = user;
   });
 
+  // Webhook HMAC covers the RAW body, so tee request bytes before Fastify's
+  // body parser consumes the stream (preParsing). JSON parsing still works —
+  // the tee feeds a PassThrough back to Fastify.
+  app.addHook("preParsing", (request, _reply, payload, done) => {
+    const path = request.routeOptions.url ?? request.url.split("?")[0] ?? "";
+    if (!path.startsWith("/hook/")) {
+      done(null, payload);
+      return;
+    }
+    const chunks: Buffer[] = [];
+    const tee = new PassThrough();
+    payload.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+      tee.write(chunk);
+    });
+    payload.on("end", () => {
+      (request as AuthedRequest).rawBody = Buffer.concat(chunks);
+      tee.end();
+      done(null, tee);
+    });
+    payload.on("error", (err) => {
+      done(err instanceof Error ? err : new Error(String(err)), payload);
+      return;
+    });
+  });
+
   // -- auth ------------------------------------------------------------------
+
+  /** P2 test page for term.* — plain html, not part of the wire contract. */
+  app.get("/term", async (_request, reply) => {
+    const html = await readFile(fileURLToPath(new URL("./term_page.html", import.meta.url)), "utf8");
+    await reply.type("text/html; charset=utf-8").send(html);
+  });
 
   app.post("/v1/auth/login", async (request, reply) => {
     const body = (request.body ?? {}) as { apiKey?: string };
@@ -329,6 +393,223 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
     const ok = deps.auth.revokeKey(user.userId, id);
     if (!ok) {
       await reply.code(404).send(openAiError(404, `unknown or already-revoked key: ${id}`, "invalid_request_error"));
+      return;
+    }
+    return { ok: true };
+  });
+
+  // -- admin: MCP servers (P2, build-order task 6) ------------------------------
+
+  app.get("/v1/admin/mcp/servers", async () => {
+    return { status: deps.mcp?.status() ?? [] };
+  });
+
+  app.put("/v1/admin/mcp/servers", async (request, reply) => {
+    const body = (request.body ?? {}) as { servers?: unknown };
+    if (!deps.mcp) {
+      await reply.code(503).send(openAiError(503, "mcp manager unavailable", "api_error"));
+      return;
+    }
+    const servers = body.servers;
+    if (!Array.isArray(servers)) {
+      await reply.code(400).send(openAiError(400, "`servers` must be an array", "invalid_request_error"));
+      return;
+    }
+    const valid: McpServer[] = [];
+    for (let i = 0; i < servers.length; i++) {
+      const s = servers[i];
+      if (!Value.Check(McpServerSchema, s)) {
+        await reply.code(400).send(openAiError(400, `servers[${i}] violates the MCP server schema`, "invalid_request_error"));
+        return;
+      }
+      valid.push(s);
+    }
+    if (new Set(valid.map((s) => s.name)).size !== valid.length) {
+      await reply.code(400).send(openAiError(400, "server names must be unique", "invalid_request_error"));
+      return;
+    }
+    deps.mcp.setServers(valid);
+    deps.onMcpServersChanged?.();
+    // Reconnect synchronously so the response reflects the new state.
+    void deps.mcp.reload();
+    return { ok: true, count: valid.length };
+  });
+
+  // -- webhook trigger plane (P3, public + HMAC) --------------------------------
+
+  app.post("/hook/:id", async (request, reply) => {
+    if (!deps.hooks) {
+      await reply.code(503).send(openAiError(503, "hooks service unavailable", "api_error"));
+      return;
+    }
+    const { id } = request.params as { id: string };
+    const body = request.body ?? {};
+    if (!Value.Check(HookPayloadSchema, body)) {
+      await reply.code(400).send(openAiError(400, "webhook payload must be { content, title?, model? }", "invalid_request_error"));
+      return;
+    }
+    const payload = body as HookPayload;
+    const sigRaw = request.headers["x-foundry-signature"];
+    const signature = Array.isArray(sigRaw) ? sigRaw[0] : sigRaw;
+    const trigger = deps.hooks.trigger(
+      id,
+      (request as AuthedRequest).rawBody ?? Buffer.alloc(0),
+      signature,
+      payload,
+    );
+    if (trigger === undefined) {
+      await reply.code(404).send(openAiError(404, `unknown hook: ${id}`, "not_found_error"));
+      return;
+    }
+    if (!trigger.ok) {
+      await reply.code(401).send(openAiError(401, `webhook rejected: ${trigger.reason}`, "authentication_error"));
+      return;
+    }
+    return { ok: true, runId: trigger.runId, conversationId: trigger.conversationId };
+  });
+
+  // -- admin: schedules (P3) -----------------------------------------------------
+
+  app.get("/v1/admin/schedules", async (request) => {
+    const user = (request as AuthedRequest).user;
+    if (!user) return { schedules: [] };
+    return { schedules: deps.schedules?.list(user.userId) ?? [] };
+  });
+
+  app.get("/v1/admin/schedules/:id", async (request, reply) => {
+    const user = (request as AuthedRequest).user;
+    if (!user) return;
+    const { id } = request.params as { id: string };
+    const schedule = deps.schedules?.get(user.userId, id);
+    if (schedule === undefined) {
+      await reply.code(404).send(openAiError(404, `unknown schedule: ${id}`, "not_found_error"));
+      return;
+    }
+    return schedule;
+  });
+
+  app.post("/v1/admin/schedules", async (request, reply) => {
+    if (!deps.schedules) {
+      await reply.code(503).send(openAiError(503, "scheduler service unavailable", "api_error"));
+      return;
+    }
+    const user = (request as AuthedRequest).user;
+    if (!user) return;
+    const body = request.body ?? {};
+    if (!Value.Check(ScheduleCreateParamsSchema, body)) {
+      await reply.code(400).send(openAiError(400, "invalid schedule params (name, kind, spec, prompt required)", "invalid_request_error"));
+      return;
+    }
+    const p = body as ScheduleCreateParams;
+    try {
+      const made = deps.schedules.create({
+        userId: user.userId,
+        name: p.name,
+        // value-validated above against ScheduleKindSchema (cron | every).
+        kind: p.kind === "every" ? ("every" as const) : ("cron" as const),
+        spec: p.spec,
+        prompt: p.prompt,
+        ...(p.model !== undefined ? { model: p.model } : {}),
+        ...(p.targetChatId !== undefined ? { targetChatId: p.targetChatId } : {}),
+        ...(p.enabled !== undefined ? { enabled: p.enabled } : {}),
+      });
+      reply.code(201);
+      return made;
+    } catch (err) {
+      await reply.code(400).send(openAiError(400, err instanceof Error ? err.message : "invalid schedule spec", "invalid_request_error"));
+      return;
+    }
+  });
+
+  app.patch("/v1/admin/schedules/:id", async (request, reply) => {
+    if (!deps.schedules) {
+      await reply.code(503).send(openAiError(503, "scheduler service unavailable", "api_error"));
+      return;
+    }
+    const user = (request as AuthedRequest).user;
+    if (!user) return;
+    const { id } = request.params as { id: string };
+    const body = request.body ?? {};
+    if (!Value.Check(SchedulePatchParamsSchema, body)) {
+      await reply.code(400).send(openAiError(400, "invalid schedule patch params", "invalid_request_error"));
+      return;
+    }
+    const p = body as SchedulePatchParams;
+    try {
+      const updated = deps.schedules.patch(user.userId, id, {
+        ...(p.name !== undefined ? { name: p.name } : {}),
+        ...(p.prompt !== undefined ? { prompt: p.prompt } : {}),
+        ...(p.spec !== undefined ? { spec: p.spec } : {}),
+        ...(p.model !== undefined ? { model: p.model } : {}),
+        ...(p.targetChatId !== undefined ? { targetChatId: p.targetChatId } : {}),
+        ...(p.enabled !== undefined ? { enabled: p.enabled } : {}),
+        ...(p.reschedule !== undefined ? { reschedule: p.reschedule } : {}),
+      });
+      if (updated === undefined) {
+        await reply.code(404).send(openAiError(404, `unknown schedule: ${id}`, "not_found_error"));
+        return;
+      }
+      return updated;
+    } catch (err) {
+      await reply.code(400).send(openAiError(400, err instanceof Error ? err.message : "invalid schedule spec", "invalid_request_error"));
+      return;
+    }
+  });
+
+  app.delete("/v1/admin/schedules/:id", async (request, reply) => {
+    if (!deps.schedules) {
+      await reply.code(503).send(openAiError(503, "scheduler service unavailable", "api_error"));
+      return;
+    }
+    const user = (request as AuthedRequest).user;
+    if (!user) return;
+    const { id } = request.params as { id: string };
+    const ok = deps.schedules.remove(user.userId, id);
+    if (!ok) {
+      await reply.code(404).send(openAiError(404, `unknown schedule: ${id}`, "not_found_error"));
+      return;
+    }
+    return { ok: true };
+  });
+
+  // -- admin: webhooks (P3; secret shown exactly once) ---------------------------
+
+  app.get("/v1/admin/hooks", async (request) => {
+    const user = (request as AuthedRequest).user;
+    if (!user) return { hooks: [] };
+    return { hooks: deps.hooks?.list(user.userId) ?? [] };
+  });
+
+  app.post("/v1/admin/hooks", async (request, reply) => {
+    if (!deps.hooks) {
+      await reply.code(503).send(openAiError(503, "hooks service unavailable", "api_error"));
+      return;
+    }
+    const user = (request as AuthedRequest).user;
+    if (!user) return;
+    const body = request.body ?? {};
+    if (!Value.Check(HookCreateParamsSchema, body)) {
+      await reply.code(400).send(openAiError(400, "invalid hook params (name required)", "invalid_request_error"));
+      return;
+    }
+    const p = body as HookCreateParams;
+    const made = deps.hooks.create(user.userId, p.name, p.model ?? null);
+    // `secret` appears exactly once — never stored in plaintext, never echoed.
+    reply.code(201);
+    return made;
+  });
+
+  app.delete("/v1/admin/hooks/:id", async (request, reply) => {
+    if (!deps.hooks) {
+      await reply.code(503).send(openAiError(503, "hooks service unavailable", "api_error"));
+      return;
+    }
+    const user = (request as AuthedRequest).user;
+    if (!user) return;
+    const { id } = request.params as { id: string };
+    const ok = deps.hooks.remove(user.userId, id);
+    if (!ok) {
+      await reply.code(404).send(openAiError(404, `unknown hook: ${id}`, "not_found_error"));
       return;
     }
     return { ok: true };

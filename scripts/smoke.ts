@@ -1,11 +1,14 @@
 /**
- * `pnpm smoke` — proves the P1 path end to end in one process:
+ * `pnpm smoke` — proves the core path end to end in one process:
  *
  *   boot core (temp data dir, ephemeral port)
  *   → GET /v1/models serves the seeded dummy catalog
  *   → POST /v1/chat/completions non-stream + SSE (true streaming, usage, [DONE])
  *   → WS connect → chat.create → chat.send → chat.delta* → chat.final
  *   → server-side persistence + reconnect replay
+ *   → P4: same-origin SPA serving (index + deep link + API envelopes intact)
+ *   → P3/P4: gated agent run through the SDK (chatSend agent+toolPolicy →
+ *     run.gate_request → run.approve → run done → final assistant message)
  *
  * Exits 0 on green, 1 with the first failing assertion.
  */
@@ -56,6 +59,23 @@ async function main(): Promise<void> {
   assert(addr !== null && typeof addr === "object", "server address available");
   port = addr.port;
   const client = new FoundryClient({ baseUrl: `http://127.0.0.1:${port}`, token: boot.rootKey?.plaintext });
+
+  // -- P4: same-origin SPA serving -------------------------------------------
+  // Present only when apps/web/build (or FOUNDRY_WEB_DIR) exists — smoke
+  // never requires the frontend build, but asserts the mechanism when here.
+  const shell = await fetch(`http://127.0.0.1:${port}/`);
+  if (shell.status === 200) {
+    const shellText = await shell.text();
+    assert(shell.headers.get("content-type")?.includes("text/html") === true, "web: / is the SPA shell");
+    assert(shellText.toLowerCase().includes("<!doctype html"), "web: shell is an html document");
+    const deep = await fetch(`http://127.0.0.1:${port}/settings`);
+    assert(deep.status === 200 && (await deep.text()).includes("<!doctype html"), "web: deep link falls back to shell");
+    const nope = await fetch(`http://127.0.0.1:${port}/v1/definitely-not-real`);
+    assert(nope.status === 401, "web: API paths are not swallowed by the shell");
+    console.log("smoke: web SPA serving ok (same-origin)");
+  } else {
+    console.log("smoke: no web build present — API-only mode (skipped)");
+  }
 
   // -- REST: models -----------------------------------------------------------
   const models = await client.models();
@@ -162,11 +182,56 @@ async function main(): Promise<void> {
   sock.close();
   sock2.close();
   sock3.close();
+
+  // -- P3/P4: gated agent run through the SDK ---------------------------------
+  // "gate-me" makes the scripted dummy issue a shell call under toolPolicy
+  // {shell: "ask"} → run.gate_request → run.approve(scope once) → done.
+  const sock4 = client.socket({ clientKind: "cli" });
+  sockRefs.push(sock4);
+  await sock4.connect();
+  const gateSeen: { gateId: string; tool: string }[] = [];
+  const runSeen: { status: string }[] = [];
+  sock4.on((event, _channel, _seq, payload) => {
+    const p = payload as Record<string, unknown>;
+    if (event === "run.gate_request") {
+      gateSeen.push({ gateId: String(p["gateId"]), tool: String(p["tool"]) });
+    }
+    if (event === "run.status" && typeof p["status"] === "string") runSeen.push({ status: p["status"] });
+  });
+
+  const gateChat = await sock4.chatCreate({ title: "smoke gates", model: "dummy/scripted" });
+  const sent = await sock4.chatSend(
+    { chatId: gateChat.id, content: "gate-me", agent: { enabled: true, toolPolicy: { shell: "ask" } } },
+    `idem-smoke-gate-${Date.now()}`,
+  );
+  await waitFor(() => gateSeen.length > 0, 8000, "run.gate_request");
+  assert(gateSeen[0].tool === "shell", "gate_request names the gated tool");
+  assert(typeof gateSeen[0].gateId === "string" && gateSeen[0].gateId.length > 0, "gate_request carries the gate id");
+
+  const approved = await sock4.runApprove(
+    { runId: sent.runId, gateId: gateSeen[0].gateId, approve: true, scope: "once" },
+    `idem-smoke-approve-${Date.now()}`,
+  );
+  assert(approved.gateId === gateSeen[0].gateId && approved.state === "approved", "run.approve resolves the gate");
+
+  await waitFor(
+    () => runSeen.some((r) => r.status === "done"),
+    10000,
+    "resumed agent run completes after approve",
+  );
+  const gateHistory = await sock4.chatHistory({ chatId: gateChat.id });
+  const lastAssistant = gateHistory[gateHistory.length - 1];
+  assert(
+    lastAssistant.role === "assistant" && String(lastAssistant.content).includes("Handled the gated command"),
+    "final assistant message lands after gate approval",
+  );
+  console.log("smoke: gated agent run via SDK ok (gate_request → approve → done)");
+  sock4.close();
 }
 
 main()
   .then(() => {
-    console.log("smoke: OK — P1 gateway green");
+    console.log("smoke: OK — gateway (P1), gates (P3), web serving + SDK gate flow (P4) green");
     return teardown(0);
   })
   .catch((err) => {
@@ -180,6 +245,13 @@ async function teardown(code: number): Promise<void> {
     await runtime?.app.close();
   } catch {
     // already closed
+  }
+  try {
+    // Stops the scheduler timer + sandbox reaper and closes MCP clients —
+    // without this the rearming timers keep the event loop alive forever.
+    await runtime?.shutdownServices();
+  } catch {
+    // already shut down
   }
   try {
     // Windows: close sqlite before unlinking the dir.

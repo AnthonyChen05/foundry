@@ -27,8 +27,8 @@ type ProtocolError = { code: "bad_request" | "unauthorized" | "not_found" |
 
 - `id` is client-generated (uuid); responses correlate by `id`.
 - `idem` (idempotency key) is REQUIRED for side-effecting methods
-  (`chat.send`, `run.start`, `run.approve`, `term.*` writes, `files.write`).
-  Server keeps a short-lived dedupe cache (10 min).
+  (`chat.send`, `run.cancel`, `run.approve`, `term.*`, `files.write`,
+  `files.mkdir`, `files.rm`). Server keeps a short-lived dedupe cache (10 min).
 - `channel` on events is one of `chat:{id}`, `run:{id}`, `term:{id}`, `sys`.
 
 ### 1.2 Handshake
@@ -65,11 +65,11 @@ First frame MUST be `connect`; anything else → hard close.
 | `chat.list` | `{}` → `ChatSummary[]` | |
 | `chat.create` | `{ title?, model? }` → `Chat` | |
 | `chat.history` | `{ chatId, before?, limit? }` → `Message[]` | canonical OpenAI messages |
-| `chat.send` | `{ chatId, content, attachments?, model?, agent?: { enabled, toolPolicy? } }` → `{ runId }` | start of everything; agent:true = autonomous run |
-| `run.get` | `{ runId }` → `Run` | status, budgets, summary |
-| `run.events` | `{ runId, since? }` → `RunEvent[]` | replay for timeline UI |
+| `chat.send` | `{ chatId, content, attachments?, model?, agent?: { enabled, toolPolicy?: { tool: "ask"\|"always"\|"session"\|"deny" } } }` → `{ runId }` | start of everything; agent:true = autonomous run; runs begin via chat.send only (no run.start in v0) |
+| `run.get` | `{ runId }` → `Run` (+ `gates?: Gate[]`) | status, budgets, summary; while open gates exist the result carries them under `gates` (ride-along so a reconnecting client can find what to approve) |
+| `run.events` | `{ runId, since? }` → `RunEvent[]` | replay for timeline UI (includes every LLM/tool step + raw provider traffic, keys redacted) |
 | `run.cancel` | `{ runId }` → `{}` | |
-| `run.approve` | `{ runId, gateId, approve, scope?: "once"\|"session"\|"always" }` → `{}` | resolves a gate |
+| `run.approve` | `{ runId, gateId, approve, scope?: "once"\|"session"\|"always" }` → `Gate` | resolves a gate; returns its full wire row (with `state`, `resolvedBy`, `resolvedAt`). Unknown gate → `not_found`; already-resolved → `bad_request`. Timeout auto-deny recorded as `state:"timeout"` |
 | `term.open` | `{ envId? }` → `{ termId, envId, replay: string }` | replay = scrollback |
 | `term.input` | `{ termId, data, b64? }` → `{}` | |
 | `term.resize` | `{ termId, cols, rows }` → `{}` | |
@@ -80,12 +80,13 @@ First frame MUST be `connect`; anything else → hard close.
 | `files.mkdir` / `files.rm` / `files.stat` | obvious | |
 | `admin.keys.*` | create/list/revoke API keys | admin only |
 | `admin.providers.*` | upsert/list providers + vault keys | keys accepted here ONLY |
-| `admin.schedules.*` | CRUD schedules | |
+| — (`admin.schedules.*` moved to REST, §2.1) | | schedules/hooks are admin-REST only |
 | `auth.login` | `{ apiKey }` → `{ sessionToken, expiresAt }` | REST-issued too |
 
-Side-effecting methods (chat.send, run.start, run.approve, term.input/close,
-files.write, run.cancel) carry `idem` **on the frame itself** (§1.1), never
-inside params — the hub's dedupe middleware reads one uniform location.
+Side-effecting methods (chat.send, run.cancel, run.approve, term.open/input/
+resize/close, files.write, files.mkdir, files.rm) carry `idem` **on the frame
+itself** (§1.1), never inside params — the hub's dedupe middleware reads one
+uniform location.
 
 ### 1.4 Events (v0)
 
@@ -93,17 +94,41 @@ inside params — the hub's dedupe middleware reads one uniform location.
 |---|---|---|
 | `chat.delta` | `chat:{id}` | `{ runId, delta }` |
 | `chat.final` | `chat:{id}` | `{ message }` (canonical OpenAI message) |
-| `run.status` | `run:{id}` | `{ runId, status, error? }` |
-| `run.delta` | `run:{id}` | `{ text? , reasoning? }` |
+| `run.status` | `run:{id}` | `{ runId, status, error?, resumed? }` (`resumed:true` after a boot-restart resume) |
+| `run.delta` | `run:{id}` | `{ text? , reasoning? }` (reserved; the P2 loop streams summaries via chat.final) |
 | `run.tool_call` | `run:{id}` | `{ call: { id, name, args } }` |
-| `run.tool_result` | `run:{id}` | `{ callId, result, ok }` |
-| `run.gate_request` | `run:{id}` | `{ gate: { gateId, tool, args, policy, createdAt } }` |
-| `run.gate_resolved` | `run:{id}` | `{ gateId, approved, scope }` |
+| `run.tool_result` | `run:{id}` | `{ id, ok, content }` (content = tool output text; ok=false on failure/denial) |
+| `run.gate_request` | `run:{id}` | `{ gateId, runId, tool, args, policy, createdAt }` (flat, no `gate:` wrapper) |
+| `run.gate_resolved` | `run:{id}` | `{ gateId, approved, scope, state }` (`state` = approved/denied/timeout; a client resolution also records the full row as a run_event) |
 | `run.usage` | `run:{id}` | `{ promptTokens, completionTokens, costEst, latencyMs }` |
 | `term.data` | `term:{id}` | `{ data, b64? }` |
-| `term.exit` | `term:{id}` | `{ code }` |
+| `term.exit` | `term:{id}` | `{ code }` (code null when closed via `term.close`) |
 | `notify.push` | `notify` | `{ title, body, runId? }` |
 | `sys.resync` | any | client must refetch channel state |
+
+### 1.5 Approval gates (P3)
+
+Per-tool policy `ask | always | session | deny`, resolved when an agent run
+wants to execute a tool call:
+
+1. The run's `chat.send` `agent.toolPolicy` map (exact tool name, then `"*"`;
+   junk entries fall back to the default) — `deny` and `always` are absolute.
+2. `"always"` approval cache (settings `gate.always:<userId>:<tool>`, granted
+   by a client approving with `scope:"always"`).
+3. `"session"` cache — scoped to the CONVERSATION (`chatId:tool` in memory,
+   not the WS session), granted by `scope:"session"`.
+4. Default `always` (fail open for benign tools; a cache or absence never
+   INTRODUCES a gate).
+
+When the effective policy is `ask`: the row lands in the `gates` table (the
+truth), `run.gate_request` fires on the run channel + ntfy `gateOpen`, the run
+moves `waiting_approval`, and the `run:*` loop parks. A `run.approve` wakes it
+— approve proceeds with that tool call; deny/timeout produces a tool result
+like `rejected: denied by user` / `auto-denied: approval timed out` and the run
+completes gracefully. Timeout is absolute from gate creation (default 15 min,
+`FOUNDRY_GATE_TIMEOUT_MS`); the timeout itself closes the gate row as
+`state:"timeout"` and emits `run.gate_resolved`. Boot with a parked run: the
+open gate row re-arms (no re-ask, timeout rescaled to already-waited time).
 
 ## 2. REST plane (OpenAI-compatible)
 
@@ -118,7 +143,33 @@ Base: `http://host:8787/v1` — auth `Authorization: Bearer <api key>`.
   Model ids are `<provider>/<model>` (e.g. `ollama/llama3.1:8b`,
   `openrouter/anthropic/claude-sonnet-4.5`); bare `model` alias maps to default.
 - `GET /healthz`, `GET /readyz`.
-- (P3) `POST /hook/:hookId` — HMAC-SHA256 signature header `X-Foundry-Signature`.
+- `POST /hook/:hookId` (P3, webhooks) — public trigger plane: `Authorization`
+  header NOT required; instead the request must carry `X-Foundry-Signature:
+  sha256=<hex>` = HMAC-SHA256 of the RAW request body keyed by the hook's
+  signing secret (`fndwhsec_…`, shown exactly once at creation). Unknown hook
+  → 404; bad/missing signature → 401; OK → `{ ok: true, runId,
+  conversationId }` and an agent run (`trigger:"webhook"`) processes the
+  prompt. Body is JSON `{ content, title?, model? }` (400 otherwise), capped
+  by the framework's 1 MiB body limit.
+
+### 2.0a Egress plane for sandboxes (P2, ADR-005) — `/v1/egress/*`
+
+Same Fastify app, separate auth: sandboxes authenticate with scoped per-env
+Bearer tokens (`esc_<48 hex>`), which they receive ONLY as container env vars
+(`OPENAI_API_KEY`/`ANTHROPIC_API_KEY` = the esc token; `OPENAI_BASE_URL`/
+`ANTHROPIC_BASE_URL` = the egress base URL). The egress plane speaks full
+OpenAI chat-completions (stream + non-stream) and:
+
+- **swaps the esc token for the real provider key** from the vault and routes
+  through the normal provider layer — real keys never enter sandbox env;
+- **meters usage** and stores raw provider traffic (redacted) as run_events;
+- unlinked calls get a fresh run with `trigger:"sandbox"`; a live agent run
+  can be attributed by sending its `X-Foundry-Run-Id` header — linked runs are
+  NEVER status-bumped or appended to by their sandbox's own LLM sub-calls;
+- `GET /v1/egress/models` lists enabled models only.
+
+Non-LLM egress is controlled by the OT egress firewall (`allowlist` mode;
+`FOUNDRY_SANDBOX_EGRESS=open` on kernels without ipset — Docker Desktop).
 
 Acceptance bar: Open WebUI and Cherry Studio can both use this endpoint as a
 custom OpenAI-compatible provider with streaming + tool calling.
@@ -145,6 +196,27 @@ copy, the DB stores hashes). OpenAI error envelope `{ error: { code, message } }
   `DELETE /v1/admin/keys/:id` → revoked keys stop verifying immediately.
 - `POST /v1/auth/login` `{ apiKey }` → `{ sessionToken, expiresAt }` — a
   short-lived session token for WS/REST (same shape as the WS `auth.login`).
+- `GET /v1/admin/mcp/servers` → `{ status: [{ name, connected, tools, error? }] }`;
+  `PUT /v1/admin/mcp/servers` with a full MCP server list (settings-driven,
+  ADR-006) reloads the MCP manager — tools join the agent registry
+  namespaced `mcp__<server>__<tool>`.
+- (P3) Schedules: `GET /v1/admin/schedules` → `{ schedules: Schedule[] }`;
+  `GET /v1/admin/schedules/:id` → `Schedule` (404 unknown); `POST
+  /v1/admin/schedules` `{ name, kind: "cron"|"every", spec, prompt, model?,
+  targetChatId?, enabled? }` → 201 `Schedule` (400 on an invalid spec —
+  validated by computing the next run up front); `PATCH
+  /v1/admin/schedules/:id` (any field subset + `reschedule?: true`) →
+  `Schedule` (spec changes and re-enabling always recompute `nextRunAt`);
+  `DELETE /v1/admin/schedules/:id` → `{ ok }` (404 unknown).
+- (P3) Hooks: `GET /v1/admin/hooks` → `{ hooks: [{ id, name, target: "chat",
+  model?, createdAt }] }` (the secret is never listed); `POST
+  /v1/admin/hooks` `{ name, model? }` → 201 `{ hook, secret, url }` — the
+  vault-encrypted signing secret in PLAINTEXT exactly once (guardrail #2
+  pattern); `DELETE /v1/admin/hooks/:id` → `{ ok }` (404 unknown). Then
+  trigger it with `POST /hook/:id` (§2).
+- `GET /term` — xterm.js terminal test page (dev convenience; P4 replaces it
+  with the web client). Holds no special auth — the page authenticates itself
+  over WS `connect`.
 
 ## 3. Core shapes (TypeBox, normative — implement exactly)
 
@@ -152,7 +224,7 @@ copy, the DB stores hashes). OpenAI error envelope `{ error: { code, message } }
 RunStatus = "queued" | "running" | "waiting_approval" | "done" | "failed" |
             "cancelled" | "timeout"
 
-Run = { id, conversationId?, trigger: "chat"|"schedule"|"webhook"|"manual",
+Run = { id, conversationId?, trigger: "chat"|"schedule"|"webhook"|"manual"|"sandbox",
         status: RunStatus, model, budgets: { maxSteps, maxTokens, maxCostUsd,
         maxWallMs }, createdAt, startedAt?, endedAt?, summary?, error? }
 
@@ -165,7 +237,8 @@ Model = { id, provider, name, caps: { vision, tools, reasoning, json },
           context, priceInPerMtok?, priceOutPerMtok?, enabled }
 
 Gate = { gateId, runId, tool, args, policy: "ask"|"always"|"session"|"deny",
-         createdAt }
+         state: "open"|"approved"|"denied"|"timeout", resolvedBy?, createdAt,
+         resolvedAt? }                           // gates tables IS the truth
 
 FileEntry = { path, size, mtime, isDir }
 ```
@@ -174,7 +247,10 @@ FileEntry = { path, size, mtime, isDir }
 
 - `term.data` payloads are terminal bytes as text (or base64 when `b64:true`).
 - Server-side scrollback ring buffer: 2000 lines per term; replayed on
-  `term.open` and reconnect.
+  `term.open` and reconnect. One live session per env — a second `term.open`
+  rejoins the SAME termId.
+- Test page: `GET /term` (xterm.js via CDN; API key stored client-side in
+  localStorage). Used for P2 acceptance; P4's web client supersedes it.
 - Envs idle > `FOUNDRY_ENV_TTL` (default 2h) may be reclaimed; workspace
   files always persist (host volume), containers are disposable.
 
@@ -194,3 +270,40 @@ FileEntry = { path, size, mtime, isDir }
   returns `bad_request` whose `error.message` lists supported versions (the
   schema accepts any non-negative integer so this check, not schema
   validation, produces the negotiation hint). Added §2.1 admin REST.
+- v0 (2026-10-07, P2, additive): agent runtime + sandbox + terminal.
+  (a) `run.tool_result` payload settled as `{ id, ok, content }` (was
+  `{ callId, result, ok }` — content carries the tool output text the
+  timeline needs); (b) `run.status` gained optional `resumed` flag;
+  (c) `term.exit.code` is null on explicit `term.close` (was int-only);
+  (d) `Run.trigger` gained `"sandbox"` (egress-plane sub-calls);
+  (e) §2.0a egress plane for sandboxes; (f) admin REST gained MCP server
+  endpoints; (g) idempotency list aligned to the implemented
+  IDEMPOTENT_METHODS (term.open/input/resize/close and files.mkdir/rm are
+  side-effecting; there is no `run.start` — runs start via `chat.send`).
+- v0 (2026-10-07, P3, additive): autonomy. (a) `run.gate_request` payload is
+  FLAT `{ gateId, runId, tool, args, policy, createdAt }` (was a nested
+  `gate:` wrapper); (b) `run.gate_resolved` gained `state` and fires for
+  timeout auto-denies too; (c) `run.approve` returns the resolved Gate (was
+  `{}`) and validates scope; (d) `run.get` carries `gates: Gate[]` while open
+  gates exist; (e) §1.5 added — gate policy precedence + session scope means
+  the CONVERSATION, timeout auto-deny closes the gate row; (f) §2 hook
+  trigger plane: HMAC over the RAW body against a vault-encrypted `fndwhsec_`
+  secret shown once (`POST /v1/admin/hooks`), no bearer auth on `/hook/:id`;
+  (g) schedules + hooks admin are REST-only (§2.1) — the WS
+  `admin.schedules.*` placeholder was dropped; (h) memory: `memory` agent
+  tool (store/search/delete) + top-k injection into the agent system prompt
+  (embeddings via a configured embedding-capable provider, deterministic
+  fallback); (i) `notify.push` fires for run done/failed, gate open, and
+  schedule/webhook fires; (j) `snapshot.activeRuns` includes
+  `waiting_approval` runs.- v0 (2026-10-13, P4, additive): first client + delivery. (a) `packages/sdk-ts`
+  complete vs this doc: typed WS helper per §1.3 method (idempotency key as a
+  second argument on side-effecting methods), REST client for §2/§2.1,
+  auto-reconnect on unexpected close via cumulative cursors (auth failure is
+  permanent for that socket), SDK error surface unified as `FoundryError`
+  (`code` = the OpenAI envelope `type`); (b) the web app connects with
+  `client.kind: "web"` and is served by core same-origin (no CORS): GET /
+  returns the SPA shell, unmatched non-API GETs fall back to it
+  (`FOUNDRY_WEB_DIR` or the repo build dir), while unknown `/v1|/hook` paths
+  still answer with the OpenAI error envelope; (c) `files.mkdir`/`files.rm`
+  accept their full param shapes (`recursive`) — earlier SDK helpers narrowed
+  them; (d) no wire changes — P4 is additive consumers only.

@@ -1,0 +1,549 @@
+/* Foundry web client — Claude color scheme.
+   Warm warm-neutral surfaces + terracotta accent; dark by default with a
+   full light variant via prefers-color-scheme. Everything reads tokens. */
+
+:root {
+  color-scheme: dark light;
+
+  --bg: #262624;           /* main chat surface */
+  --bg-side: #1f1e1d;      /* sidebar / right panel */
+  --bg-raised: #30302e;    /* cards, bubbles, composer, code */
+  --bg-overlay: #3a3a37;   /* hover */
+  --border: #3e3e38;
+  --border-soft: #2e2e2b;
+
+  --fg: #f5f4ef;           /* cream */
+  --fg-dim: #a8a49c;
+  --fg-faint: #76726c;
+
+  --accent: #d97757;       /* terracotta */
+  --accent-strong: #e28a6c; /* hover */
+  --accent-fg: #faf9f5;
+  --accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
+
+  --ok: #8db087;
+  --err: #dd6e63;
+  --warn: #d4a27f;
+  --info: #99aecf;
+
+  --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, "Segoe UI", "Inter", system-ui, Roboto, sans-serif;
+  --radius: 10px;
+  --radius-lg: 20px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #faf9f5;
+    --bg-side: #f0eee6;
+    --bg-raised: #ffffff;
+    --bg-overlay: #eceade;
+    --border: #e2ddd3;
+    --border-soft: #ebe7dc;
+
+    --fg: #26241f;
+    --fg-dim: #6f6a61;
+    --fg-faint: #9a958b;
+
+    --ok: #4d8a4e;
+    --err: #c05244;
+    --warn: #b0793c;
+    --info: #4869a8;
+
+    --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg-side);
+  color: var(--fg);
+  font: 14.5px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* -- generic controls ------------------------------------------------------- */
+
+button {
+  font: inherit;
+  background: var(--bg-raised);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--fg-faint);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+button.danger {
+  color: var(--err);
+}
+
+button.approve {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-dim);
+}
+
+button.ghost:hover {
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: -1px;
+}
+
+/* Icon-only button: square hit area, muted until hover. */
+button.icon-btn {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-dim);
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  flex: none;
+}
+
+button.icon-btn:hover {
+  color: var(--fg);
+  background: var(--bg-overlay);
+}
+
+button.icon-btn.on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  width: 100%;
+}
+
+textarea {
+  resize: vertical;
+  font-size: 13.5px;
+}
+
+code,
+pre {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+pre {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* -- layout ------------------------------------------------------------------ */
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  flex: none;
+  min-height: 46px;
+}
+
+.pane-head h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--fg);
+}
+
+.pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+
+/* -- badges ------------------------------------------------------------------- */
+
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  background: transparent;
+}
+
+.badge.run {
+  color: var(--info);
+}
+
+.badge.done {
+  color: var(--ok);
+}
+
+.badge.failed,
+.badge.timeout {
+  color: var(--err);
+}
+
+.badge.waiting_approval {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.badge.cancelled {
+  color: var(--fg-faint);
+}
+
+.badge.queued {
+  color: var(--fg-dim);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot.open {
+  background: var(--ok);
+}
+
+.dot.online {
+  background: var(--ok);
+}
+
+.dot.connecting,
+.dot.reconnecting {
+  background: var(--warn);
+}
+
+.dot.offline,
+.dot.closed {
+  background: var(--err);
+}
+
+/* -- chat transcript ------------------------------------------------------------ */
+
+.chat-scroll {
+  display: flex;
+  flex-direction: column;
+}
+
+.msg .who {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--fg-faint);
+  margin-bottom: 3px;
+}
+
+.msg .bubble {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg.user .bubble {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  padding: 10px 16px;
+}
+
+.msg.assistant .bubble,
+.msg.tool .bubble {
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+.msg.tool .bubble {
+  font-family: var(--mono);
+}
+
+.msg .streaming {
+  display: inline-block;
+  width: 7px;
+  height: 15px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: blink 1s steps(2) infinite;
+  border-radius: 1px;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.15;
+  }
+}
+
+/* -- gate card (approval flow) -------------------------------------------------- */
+
+.gate {
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 8%, var(--bg-raised));
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gate .tool {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--warn);
+}
+
+.gate pre {
+  margin: 0;
+  max-height: 160px;
+}
+
+/* -- timeline (run event JSON log) ------------------------------------------------ */
+
+.tl {
+  font-family: var(--mono);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tl .ev {
+  display: block; /* narrow panel layout stacks rows vertically */
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+
+.tl .ev:nth-child(odd) {
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+}
+
+.tl .ev .seq {
+  color: var(--fg-faint);
+  margin-right: 6px;
+}
+
+.tl .ev .type {
+  color: var(--info);
+  font-weight: 600;
+}
+
+.tl .ev.t-gate_request .type,
+.tl .ev.t-gate_resolved .type {
+  color: var(--warn);
+}
+
+.tl .ev.t-raw_provider_request .type,
+.tl .ev.t-raw_provider_response .type {
+  color: var(--fg-faint);
+}
+
+.tl .ev pre {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  max-height: 140px;
+}
+
+/* -- forms (settings) -------------------------------------------------------------- */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 640px;
+}
+
+.form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form .field label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-dim);
+}
+
+.form .inline {
+  display: flex;
+  gap: 8px;
+}
+
+.form .inline > * {
+  flex: 1;
+}
+
+.secret {
+  font-family: var(--mono);
+  background: var(--bg-raised);
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  color: var(--accent);
+  word-break: break-all;
+}
+
+/* -- tables --------------------------------------------------------------------- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th {
+  text-align: left;
+  color: var(--fg-dim);
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: top;
+}
+
+td.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* -- misc ------------------------------------------------------------------------ */
+
+.muted {
+  color: var(--fg-dim);
+}
+
+.error-text {
+  color: var(--err);
+}
+
+.ok-text {
+  color: var(--ok);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.crumb {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.crumb button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+kbd {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg-faint);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 1px 5px;
+  background: var(--bg-raised);
+}

@@ -41,24 +41,33 @@ run_events   (id INTEGER PK AUTOINC, run_id FK, seq INT,
               payload JSON, created_at,
               UNIQUE(run_id, seq))            -- append-only; NEVER update/delete
 
-gates        (id PK, run_id FK, tool, args JSON,
+gates        (id PK, run_id FK, tool, args JSON, call_id?,   -- call_id = the
+              -- tool_call id this gate parks (resume reconcile); null for
+              -- pre-P3 rows
               policy 'ask'|'always'|'session'|'deny',
               state 'open'|'approved'|'denied'|'timeout',
               resolved_by?, created_at, resolved_at?)
 
-schedules    (id PK, user_id, name, kind 'cron'|'every', spec,   -- '0 9 * * 1-5' | 3600
-              prompt, target_chat_id?, enabled,
-              next_run_at INT, last_run_id?, created_at)
+schedules    (id PK, user_id, name, kind 'cron'|'every', spec,   -- '0 9 * * 1-5' | '3600'
+              prompt, model?,                    -- null → default model at fire time
+              target_chat_id?, enabled,
+              next_run_at INT, last_run_id?,     -- next_run_at recomputed FROM NOW
+              created_at)                        -- at fire; missed ticks coalesce
 
 memories     (id PK, user_id, content, source_run_id?, importance REAL,
               created_at)                       -- vec index: sqlite-vec virtual table
 memory_vec    (embedding_id PK = memories.id, embedding FLOAT[dim])
+              -- embedding model: settings 'memory.embedding_model', else first
+              -- enabled provider with an embed adapter; no vectors → search
+              -- degrades to substring matching
 
 blobs        (id PK,           -- sha256 hex
               size INT, mime, path, refcount INT DEFAULT 0, created_at)
              -- files at $FOUNDRY_DATA_DIR/blobs/<aa>/<sha256>
 
 snapshots    (id PK, env_id, workspace_id, blob_id FK, note?, created_at)
+             -- blob = tar.gz of the whole workspace ((gzip, not zstd — zero
+             -- native deps; revisit when a zstd driver is available))
 
 workspaces   (id PK, user_id, name, path,        -- $FOUNDRY_DATA_DIR/workspaces/<id>
               created_at)
@@ -72,8 +81,10 @@ usage        (id INTEGER PK AUTOINC, run_id?, provider, model,
               latency_ms INT, created_at)       -- INDEX (created_at)
 
 settings     (key PK, value JSON)                -- routing rules, policies, ntfy url, …
-hooks        (id PK, user_id, name, secret_hash, target 'schedule'|'chat',
-              created_at)                        -- P3 webhook triggers
+hooks        (id PK, user_id, name, secret_vault_id?,  -- HMAC signing secret is
+              -- vault-ENCRYPTED (verification needs the secret itself, unlike
+              -- key verifiers); operator sees plaintext exactly once at create
+              target 'schedule'|'chat', model?, created_at)   -- P3 webhook triggers
 ```
 
 Rules:

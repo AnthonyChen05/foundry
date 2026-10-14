@@ -54,21 +54,104 @@ comes free: per-channel `seq` cursors on events, ring-buffer replay on
 reconnect, `sys.resync` when a client falls outside the buffer, and refetch
 methods (`chat.history`, `run.events`) as the convergence path.
 
-## Quickstart (P1 state)
+## Quickstart (P4 state)
 
-Status: P1 gateway MVP — provider adapters (`dummy` scripted, `openai_compat`,
-`anthropic` shim), OpenAI-compatible REST with SSE streaming, private WS plane
-(connect handshake, per-channel seq + replay buffer, chat.*), SQLite persistence,
-usage ledger, key vault.
+Status: P4 first client on top of P3 autonomy — provider adapters (`dummy`
+scripted, `openai_compat`, `anthropic` shim), OpenAI-compatible REST with SSE
+streaming, private WS plane (connect handshake, per-channel seq + replay
+buffer, chat.*), agent runs with tools (`shell`, `fs.*`, `fetch`, `done`,
+`mcp__<server>__<tool>`) in a sandboxed `open-terminal` container, run event
+replay + boot-resume, PTY terminal at `/term`, egress credential proxy
+(sandboxes never hold real keys), workspace snapshots, **approval gates**
+(per-tool `ask`/`always`/`session`/`deny`, `run.approve` + ntfy, timeout
+auto-deny, parked runs survive restarts), **schedules** (cron + every-seconds,
+admin REST, missed ticks coalesce), **webhooks** (`POST /hook/:id`, HMAC over
+the raw body, secret shown once), **long-term memory** (`memory` agent tool,
+sqlite-vec top-k injection into agent runs), and **ntfy push** (run
+done/failed, gate open) — plus the **P4 client layer**: `@foundry/sdk-ts` (typed
+WS + REST + auto-reconnect) and a **web app** (SvelteKit 2 + Svelte 5 SPA:
+chat with live streaming, run timeline with approve/deny gates, terminal
+(xterm.js), file browser, settings), served by core from the same origin.
 
 ```sh
 pnpm install                       # first time
 cp .env.example .env               # then set FOUNDRY_MASTER_KEY (required)
-pnpm dev                           # boots on 127.0.0.1:8787
+pnpm build                         # builds core, sdk, and the web SPA
+pnpm dev                           # boots on 127.0.0.1:8787 (web UI at /)
 curl http://127.0.0.1:8787/healthz # -> {"ok":true,...}
 pnpm test                          # unit tests (no Docker needed)
-pnpm smoke                         # end-to-end: REST SSE + WS chat + replay
+FOUNDRY_INTEGRATION=1 pnpm test    # with Docker: real open-terminal sandbox
+pnpm smoke                         # REST SSE + WS chat + replay + SPA + gated run
 ```
+
+Web app: open `http://127.0.0.1:8787/` — sign in with an API key (`fnd_…`, the
+auto-minted admin key prints at first boot), and you get chat with streaming,
+the run timeline (approve/deny gate cards, live tool events), a terminal, a
+file browser over the sandbox workspace, and settings (providers, keys,
+schedules, webhooks, MCP). Core serves the SPA from the same origin — no CORS,
+no separate deployment; `FOUNDRY_WEB_DIR` overrides the build dir, and absent
+a build core runs API-only. Dev mode: `pnpm --filter @foundry/web dev` proxies
+to the core on 127.0.0.1:8787.
+
+Agent runs: send `chat.send` with `agent: true` over WS — the loop streams
+`run.*` timeline events (`run.tool_call` / `run.tool_result` / `run.status`),
+executes tools inside the sandbox container, takes a workspace snapshot at run
+end, and resumes from its event log if core is killed mid-run. The web
+timeline shows all of it live, with gate cards when a tool waits for approval.
+
+Terminals: open the Terminal tab in the web app, or `http://127.0.0.1:8787/term`
+(xterm.js test page; put the API key in localStorage or paste it into the
+page) → `term.open` / `term.input` / `term.resize` / reconnect scrollback
+replay.
+
+Sandbox egress: sandboxes hold only `esc_*` scoped tokens and call the
+gateway's egress proxy (`/v1/egress/*`), which swaps real vaulted keys and
+meters usage (ADR-005). On Docker Desktop set `FOUNDRY_SANDBOX_EGRESS=open`
+(its kernel lacks ipset, so OT's egress firewall can't install); on Linux the
+default `allowlist` mode denies everything but the gateway.
+
+Autonomy (P3): gate a tool by sending `agent: { enabled: true, toolPolicy: {
+"shell": "ask" } }` in `chat.send` — the run parks on `waiting_approval`,
+ntfy pings, and `run.approve { runId, gateId, approve, scope }` (WS,
+idempotent) resumes or rejects it; nothing gates unless you ask. Schedules
+and webhooks are admin-REST (`/v1/admin/schedules`, `/v1/admin/hooks` → `POST
+/hook/<id>` with `X-Foundry-Signature: sha256=…`). Memory persists via the
+agent's `memory` tool and is recalled automatically in later chats; set
+`memory.embedding_model` in settings (or run a provider with an `embed`
+adapter) for vector recall, otherwise substring matching.
+
+ntfy push: set `FOUNDRY_NTFY_URL` + `FOUNDRY_NTFY_TOPIC` — run done/failed,
+gate opened, schedule/webhook fired.
+
+Use it as an OpenAI-compatible provider from any client (curl `-N` = no buffer):
+
+Agent runs: send `chat.send` with `agent: true` over WS — the loop streams
+`run.*` timeline events (`run.tool_call` / `run.tool_result` / `run.status`),
+executes tools inside the sandbox container, takes a workspace snapshot at run
+end, and resumes from its event log if core is killed mid-run.
+
+Terminals: open `http://127.0.0.1:8787/term` (xterm.js test page; put the API
+key in localStorage or paste it into the page) → `term.open` / `term.input` /
+`term.resize` / reconnect scrollback replay.
+
+Sandbox egress: sandboxes hold only `esc_*` scoped tokens and call the
+gateway's egress proxy (`/v1/egress/*`), which swaps real vaulted keys and
+meters usage (ADR-005). On Docker Desktop set `FOUNDRY_SANDBOX_EGRESS=open`
+(its kernel lacks ipset, so OT's egress firewall can't install); on Linux the
+default `allowlist` mode denies everything but the gateway.
+
+Autonomy (P3): gate a tool by sending `agent: { enabled: true, toolPolicy: {
+"shell": "ask" } }` in `chat.send` — the run parks on `waiting_approval`,
+ntfy pings, and `run.approve { runId, gateId, approve, scope }` (WS,
+idempotent) resumes or rejects it; nothing gates unless you ask. Schedules
+and webhooks are admin-REST (`/v1/admin/schedules`, `/v1/admin/hooks` → `POST
+/hook/<id>` with `X-Foundry-Signature: sha256=…`). Memory persists via the
+agent's `memory` tool and is recalled automatically in later chats; set
+`memory.embedding_model` in settings (or run a provider with an `embed`
+adapter) for vector recall, otherwise substring matching.
+
+ntfy push: set `FOUNDRY_NTFY_URL` + `FOUNDRY_NTFY_TOPIC` — run done/failed,
+gate opened, schedule/webhook fired.
 
 Use it as an OpenAI-compatible provider from any client (curl `-N` = no buffer):
 

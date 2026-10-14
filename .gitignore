@@ -5,6 +5,10 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# apps/web: SvelteKit build + generated dirs
+apps/web/build/
+apps/web/.svelte-kit/
+
 # foundry state (db, blobs, workspaces, vault test artifacts)
 data/
 *.db

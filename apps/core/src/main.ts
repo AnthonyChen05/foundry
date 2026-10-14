@@ -45,12 +45,13 @@ async function main(): Promise<void> {
   });
 
   await bootstrapServices(db, vault, config, logger);
-  const rt = await buildRuntime({ config, version, db, vault });
+  const rt = await buildRuntime({ config, version, db, vault, log: logger });
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, "shutting down");
     try {
       await rt.app.close();
+      await rt.shutdownServices();
       db.sqlite.close();
       process.exitCode = 0;
     } catch (err) {
