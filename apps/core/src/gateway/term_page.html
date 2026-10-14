@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Foundry /term</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/addon-fit.min.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #141414; }
+  #root { height: 100%; padding: 8px 16px; box-sizing: border-box; }
+  #term { height: 100%; }
+  #hint { position: fixed; top: 8px; right: 16px; color: #666;
+          font: 12px/1.4 monospace; user-select: none; }
+</style>
+</head>
+<body>
+<div id="root"><div id="term"></div></div>
+<div id="hint">term.open via WS @ /ws &middot; resize propagates &middot; scrollback replays on reconnect</div>
+<script>
+"use strict";
+// P2 test page (test page only — the real client is the P4 web app, drawn
+// via sdk-ts). Wire frames per protocol.md §1: {type:"req",id,method,params}
+// in, {type:"res",id,ok,payload|error} back, {type:"event",event,channel,
+// seq,payload} pushed. A reconnect with no envId rejoins the same session and
+// receives its scrollback as term.open replay.
+const term = new Terminal({
+  fontFamily: "Consolas, Menlo, monospace",
+  fontSize: 14,
+  cursorBlink: true,
+  scrollback: 2000,
+  theme: { background: "#141414" },
+});
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open(document.getElementById("term"));
+fit.fit();
+
+let ws;
+let openId = 1;
+let termId = undefined;
+let pendingInput = "";
+
+function b64bytes(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function sendReq(method, params) {
+  const id = openId++;
+  ws.send(JSON.stringify({ type: "req", id, method, params, idem: `term-${method}-${id}` }));
+  return id;
+}
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => {
+    // First frame MUST be connect (protocol.md §1); token remembered locally.
+    let apiKey = null;
+    try { apiKey = localStorage.getItem("foundry.apikey"); } catch { /* private mode */ }
+    apiKey = apiKey || prompt("foundry api key:");
+    if (apiKey) { try { localStorage.setItem("foundry.apikey", apiKey); } catch { /* ignore */ } }
+    ws.send(JSON.stringify({
+      type: "req",
+      id: 0,
+      method: "connect",
+      params: { protocol: 0, auth: { token: apiKey || "" }, client: { kind: "cli", version: "0" } },
+    }));
+  };
+  ws.onmessage = (ev) => {
+    let frame;
+    try { frame = JSON.parse(ev.data); } catch { return; }
+    if (frame.type === "res") {
+      if (!frame.ok) {
+        term.write(`\r\n\x1b[31m[error] ${frame.error ? frame.error.code + ": " + (frame.error.message || "") : "unknown"}\x1b[0m\r\n`);
+        return;
+      }
+      if (frame.id === 0) {
+        sendReq("term.open", {});
+      } else if (termId === undefined && frame.payload && frame.payload.termId) {
+        termId = frame.payload.termId;
+        term.reset();
+        if (frame.payload.replay) term.write(b64bytes(btoa(frame.payload.replay)));
+      }
+      return;
+    }
+    if (frame.type === "event") {
+      if (frame.event === "term.data" && frame.payload && typeof frame.payload.data === "string") {
+        term.write(frame.payload.b64 ? b64bytes(frame.payload.data) : new TextEncoder().encode(frame.payload.data));
+      } else if (frame.event === "term.exit") {
+        term.write(`\r\n\x1b[33m[session ended, code ${frame.payload ? frame.payload.code : "?"}]\x1b[0m\r\n`);
+      }
+      return;
+    }
+  };
+  ws.onclose = () => {
+    term.write("\r\n\x1b[31m[ws closed — reconnecting...]\x1b[0m\r\n");
+    setTimeout(connect, 1500);
+  };
+}
+
+// Coalesce keystrokes so typing stays snappy while WS frame count stays low.
+const flushTimer = setInterval(() => {
+  if (pendingInput.length === 0 || !ws || ws.readyState !== 1 || !termId) return;
+  const data = btoa(unescape(encodeURIComponent(pendingInput)));
+  pendingInput = "";
+  sendReq("term.input", { termId, data, b64: true });
+}, 30);
+term.onData((d) => { pendingInput += d; });
+
+window.addEventListener("resize", () => {
+  fit.fit();
+  if (!ws || ws.readyState !== 1 || !termId) return;
+  sendReq("term.resize", { termId, cols: term.cols, rows: term.rows });
+});
+
+connect();
+</script>
+</body>
+</html>

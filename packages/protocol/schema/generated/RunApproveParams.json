@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "required": [
+    "runId",
+    "gateId",
+    "approve"
+  ],
+  "properties": {
+    "runId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "gateId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "approve": {
+      "type": "boolean"
+    },
+    "scope": {
+      "description": "Scope of an approval: this call, this session, or forever.",
+      "anyOf": [
+        {
+          "const": "once",
+          "type": "string"
+        },
+        {
+          "const": "session",
+          "type": "string"
+        },
+        {
+          "const": "always",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "RunApproveParams",
+  "title": "RunApproveParams"
+}

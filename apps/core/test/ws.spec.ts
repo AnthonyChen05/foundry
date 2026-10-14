@@ -290,7 +290,8 @@ describe("WS errors", () => {
   it("unknown method → bad_request", async () => {
     const sock = client.socket();
     await sock.connect();
-    await expect(sock.req("term.open", {})).rejects.toMatchObject({ code: "bad_request" });
+    // term.open is REAL as of P2; probe something that never will be.
+    await expect(sock.req("sys.flux", {})).rejects.toMatchObject({ code: "bad_request" });
     sock.close();
   });
 

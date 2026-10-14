@@ -17,6 +17,10 @@
     {
       "const": "manual",
       "type": "string"
+    },
+    {
+      "const": "sandbox",
+      "type": "string"
     }
   ],
   "title": "RunTrigger"

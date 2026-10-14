@@ -158,6 +158,9 @@ export const runs = sqliteTable(
     status: text("status").notNull().$type<RunStatusValue>(),
     model: text("model").notNull(),
     budgets: text("budgets", { mode: "json" }).$type<RunBudgets>().notNull(),
+    /** True when the run is an autonomous agent loop (P2) — boot-time resume
+     *  reconstructs these from run_events; plain chat runs don't resume. */
+    agent: integer("agent", { mode: "boolean" }).notNull().default(false),
     createdAt: integer("created_at").notNull(),
     startedAt: integer("started_at"),
     endedAt: integer("ended_at"),
@@ -193,6 +196,8 @@ export const gates = sqliteTable(
       .references(() => runs.id),
     tool: text("tool").notNull(),
     args: text("args", { mode: "json" }).$type<unknown>(),
+    /** tool_call id this gate parks (null for pre-P3 rows); resume reconcile keyed on it */
+    callId: text("call_id"),
     /** 'ask' | 'always' | 'session' | 'deny' */
     policy: text("policy").notNull(),
     /** 'open' | 'approved' | 'denied' | 'timeout' */
@@ -221,6 +226,8 @@ export const schedules = sqliteTable(
     /** cron spec '0 9 * * 1-5' for kind=cron; seconds for kind=every */
     spec: text("spec").notNull(),
     prompt: text("prompt").notNull(),
+    /** explicit model override (wire form like "dummy/scripted"); null → default model at fire time */
+    model: text("model"),
     targetChatId: text("target_chat_id"),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
     nextRunAt: integer("next_run_at").notNull(),
@@ -342,9 +349,16 @@ export const hooks = sqliteTable(
       .notNull()
       .references(() => users.id),
     name: text("name").notNull(),
-    secretHash: text("secret_hash").notNull(),
+    /**
+     * HMAC-SHA256 signing secret, vault-encrypted (row id in the vault table) —
+     * verification needs the SECRET itself (unlike api keys/sessions, which are
+     * verifiers), so it is encrypted at rest + handed to the operator ONCE.
+     */
+    secretVaultId: text("secret_vault_id"),
     /** 'schedule' | 'chat' */
     target: text("target").notNull(),
+    /** Wire-form model for triggered runs; null → settings default_model. */
+    model: text("model"),
     createdAt: integer("created_at").notNull(),
   },
   (t) => [index("hooks_user_idx").on(t.userId)],

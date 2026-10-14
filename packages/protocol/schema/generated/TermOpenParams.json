@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "envId": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "$id": "TermOpenParams",
+  "title": "TermOpenParams"
+}

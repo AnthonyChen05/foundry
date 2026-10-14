@@ -121,5 +121,40 @@ export function createOpenAiCompatAdapter(): ProviderAdapter {
       }
       return json as ChatCompletionResponse;
     },
+
+    /** POST {base}/v1/embeddings — Ollama/OpenAI/vLLM all speak it. */
+    async embed(texts: string[], ctx: ProviderRequestContext): Promise<number[][]> {
+      const base = ctx.baseUrl.replace(/\/$/, "");
+      const url = `${base}/v1/embeddings`;
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers: headersWithKey(ctx),
+          body: JSON.stringify({ model: ctx.model, input: texts }),
+          signal: ctx.signal,
+        });
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") throw err;
+        throw new ProviderError(`embeddings upstream unreachable: ${String(err)}`, 502, true);
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new ProviderError(`embeddings upstream ${res.status}: ${text.slice(0, 500)}`, 502, res.status >= 500);
+      }
+      const json = (await res.json()) as { data?: { index?: number; embedding?: unknown }[] };
+      if (!Array.isArray(json.data)) throw new ProviderError(`malformed embeddings response from ${url}`, 502);
+      const out: number[][] = [];
+      for (const row of json.data) {
+        if (!Array.isArray(row.embedding) || typeof row.index !== "number") {
+          throw new ProviderError(`malformed embeddings response from ${url}`, 502);
+        }
+        out[row.index] = row.embedding;
+      }
+      if (out.length !== texts.length || out.some((v) => !Array.isArray(v))) {
+        throw new ProviderError(`embeddings count mismatch from ${url}`, 502);
+      }
+      return out;
+    },
   };
 }

@@ -132,7 +132,16 @@ export class ChatService {
       .run();
   }
 
-  private bumpStatus(runId: string, status: "running" | "done" | "failed" | "cancelled", extra?: { error?: string }): void {
+  /** Agent-runtime timeline events (tool_call / tool_result / error). */
+  recordRunEvent(runId: string, type: RunEventType, payload: unknown): void {
+    this.appendRunEvent(runId, type, payload);
+  }
+
+  bumpStatus(
+    runId: string,
+    status: "running" | "done" | "failed" | "cancelled" | "waiting_approval",
+    extra?: { error?: string },
+  ): void {
     const patch: Partial<typeof runs.$inferInsert> = { status };
     if (status === "running") patch.startedAt = Date.now();
     if (status === "done" || status === "failed" || status === "cancelled") patch.endedAt = Date.now();
@@ -141,8 +150,8 @@ export class ChatService {
     this.appendRunEvent(runId, "status", { runId, status, ...(extra?.error ? { error: extra.error } : {}) });
   }
 
-  /** Insert a run row; status = running. */
-  createRun(opts: { userId: string; conversationId?: string; model: string; trigger: "chat" | "schedule" | "webhook" | "manual" }): string {
+  /** Insert a run row; status = running. `agent` = tool-loop run (P2). */
+  createRun(opts: { userId: string; conversationId?: string; model: string; trigger: "chat" | "schedule" | "webhook" | "manual" | "sandbox"; agent?: boolean }): string {
     const id = `run_${ulid()}`;
     this.dbx.db
       .insert(runs)
@@ -154,6 +163,7 @@ export class ChatService {
         status: "running",
         model: opts.model,
         budgets: { ...DEFAULT_BUDGETS },
+        ...(opts.agent === true ? { agent: true as const } : {}),
         createdAt: Date.now(),
         startedAt: Date.now(),
       })
@@ -166,6 +176,7 @@ export class ChatService {
   getRun(runId: string):
     | {
         id: string;
+        userId: string;
         trigger: string;
         status: string;
         model: string;
@@ -182,6 +193,7 @@ export class ChatService {
     if (!r) return undefined;
     return {
       id: r.id,
+      userId: r.userId,
       trigger: r.trigger,
       status: r.status,
       model: r.model,
@@ -247,38 +259,29 @@ export class ChatService {
   }
 
   /**
-   * The pipeline: run → provider stream → deltas → persist → usage → done.
-   * Throws ProviderError; run marked failed first (event log first, always).
+   * ONE provider completion under a pre-created run — the shared inner step
+   * for both the single-shot chat pipeline and the P2 agent loop. Stores the
+   * redacted raw request/response (guardrail #4), streams deltas as
+   * run_events + run.delta, writes the usage row + run.usage, and returns
+   * the assembled assistant message. Does NOT touch run status, conversation
+   * messages, or chat.* events — callers own those.
    */
-  async runChat(opts: {
-    userId: string;
+  async stepCompletion(opts: {
+    runId: string;
     wireModel: string;
     messages: Message[];
     tools?: ToolDefinition[];
     toolChoice?: ToolChoice;
     temperature?: number;
     maxTokens?: number;
-    /** Unknown client fields passed through to the provider untouched. */
     passthrough?: Record<string, unknown>;
-    trigger: "chat" | "schedule" | "webhook" | "manual";
-    conversationId?: string;
     emit?: EmitFn;
     signal: AbortSignal;
-    /** Per-chunk tap for true SSE streaming (REST plane). Called as chunks arrive. */
     onChunk?: (chunk: ChatChunk) => void;
-    /** WS plane pre-allocates the run (so chat.send replies {runId} at once). */
-    runId?: string;
-  }): Promise<RunChatResult> {
+  }): Promise<{ message: Message & { reasoning_content?: string }; finishReason: string; usage: Usage }> {
     const emit: EmitFn = opts.emit ?? (() => {});
     const route = this.route(opts.wireModel);
-    const runId = opts.runId ?? this.createRun({
-      userId: opts.userId,
-      conversationId: opts.conversationId,
-      model: route.runModelId,
-      trigger: opts.trigger,
-    });
-    const chanRun = `run:${runId}`;
-    emit("run.status", chanRun, { runId, status: "running" });
+    const chanRun = `run:${opts.runId}`;
 
     const request: ChatCompletionRequest = {
       ...(opts.passthrough ?? {}),
@@ -292,7 +295,7 @@ export class ChatService {
       ...(opts.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
     };
 
-    this.appendRunEvent(runId, "raw_provider_request", ChatService.redactedRequest(`gateway→${route.provider.kind}`, route.provider.kind, { Authorization: "[REDACTED]" }, { ...request, model: route.upstreamModel }));
+    this.appendRunEvent(opts.runId, "raw_provider_request", ChatService.redactedRequest(`gateway→${route.provider.kind}`, route.provider.kind, { Authorization: "[REDACTED]" }, { ...request, model: route.upstreamModel }));
 
     const adapter = adapterFor(route.provider.kind);
     const startedAt = Date.now();
@@ -314,13 +317,10 @@ export class ChatService {
         const hasText = typeof d.content === "string" && d.content.length > 0;
         const hasReasoning = typeof d.reasoning_content === "string" && d.reasoning_content.length > 0;
         if (hasText || hasReasoning) {
-          this.appendRunEvent(runId, "delta", { text: hasText ? d.content : "", reasoning: hasReasoning ? d.reasoning_content : "" });
+          this.appendRunEvent(opts.runId, "delta", { text: hasText ? d.content : "", reasoning: hasReasoning ? d.reasoning_content : "" });
         }
-        // deltas out: chat.delta carries text for the conversation view;
-        // run.delta mirrors text + reasoning for the timeline view.
-        if (hasText && opts.conversationId !== undefined) {
-          emit("chat.delta", `chat:${opts.conversationId}`, { runId, delta: d.content });
-        }
+        // Timeline deltas: run.delta carries text + reasoning. (chat.* deltas
+        // belong to the conversation view — only runChat emits those.)
         if (hasText || hasReasoning) {
           emit("run.delta", chanRun, {
             ...(hasText ? { text: d.content } : {}),
@@ -337,15 +337,15 @@ export class ChatService {
       const latencyMs = Date.now() - startedAt;
       const finalUsage: Usage =
         assembled.usage ?? estimateFromChars(opts.messages, assembled.message);
-      this.appendRunEvent(runId, "raw_provider_response", {
+      this.appendRunEvent(opts.runId, "raw_provider_response", {
         provider: route.provider.kind,
         message: assembled.message,
         finishReason: assembled.finishReason,
         usage: finalUsage,
       });
 
-      const cost = this.writeUsage(runId, route.runModelId, route.provider.id, finalUsage, latencyMs);
-      this.appendRunEvent(runId, "usage", {
+      const cost = this.writeUsage(opts.runId, route.runModelId, route.provider.id, finalUsage, latencyMs);
+      this.appendRunEvent(opts.runId, "usage", {
         promptTokens: finalUsage.prompt_tokens,
         completionTokens: finalUsage.completion_tokens,
         costEst: cost,
@@ -358,20 +358,96 @@ export class ChatService {
         latencyMs,
       });
 
+      return { message: assembled.message, finishReason: assembled.finishReason, usage: finalUsage };
+    } catch (err) {
+      if (err instanceof ProviderError) throw err;
+      const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      throw new ProviderError(msg, 502);
+    }
+  }
+
+  /**
+   * The single-shot chat pipeline (REST + WS): pre-created or fresh run,
+   * status lifecycle, chat.* conversation events, message persistence.
+   * The provider step delegates to stepCompletion; v0 aborts = cancelled.
+   */
+  async runChat(opts: {
+    userId: string;
+    wireModel: string;
+    messages: Message[];
+    tools?: ToolDefinition[];
+    toolChoice?: ToolChoice;
+    temperature?: number;
+    maxTokens?: number;
+    /** Unknown client fields passed through to the provider untouched. */
+    passthrough?: Record<string, unknown>;
+    trigger: "chat" | "schedule" | "webhook" | "manual" | "sandbox";
+    conversationId?: string;
+    emit?: EmitFn;
+    signal: AbortSignal;
+    /** Per-chunk tap for true SSE streaming (REST plane). Called as chunks arrive. */
+    onChunk?: (chunk: ChatChunk) => void;
+    /** WS plane pre-allocates the run (so chat.send replies {runId} at once). */
+    runId?: string;
+  }): Promise<RunChatResult> {
+    const emit: EmitFn = opts.emit ?? (() => {});
+    const runId =
+      opts.runId ??
+      this.createRun({
+        userId: opts.userId,
+        conversationId: opts.conversationId,
+        model: opts.wireModel,
+        trigger: opts.trigger,
+      });
+    const chanRun = `run:${runId}`;
+    emit("run.status", chanRun, { runId, status: "running" });
+
+    // The conversation view needs chat.delta (WS chat plane): mirror the text
+    // deltas that stepCompletion emits as run.delta.
+    const convEmit: EmitFn =
+      opts.conversationId !== undefined
+        ? (event, channel, payload) => {
+            if (event === "run.delta" && typeof payload === "object" && payload !== null) {
+              const text = (payload as { text?: unknown }).text;
+              if (typeof text === "string" && text.length > 0) {
+                emit("chat.delta", `chat:${opts.conversationId}`, { delta: text });
+              }
+            }
+            emit(event, channel, payload);
+          }
+        : emit;
+
+    try {
+      const step = await this.stepCompletion({
+        runId,
+        wireModel: opts.wireModel,
+        messages: opts.messages,
+        ...(opts.tools !== undefined ? { tools: opts.tools } : {}),
+        ...(opts.toolChoice !== undefined ? { tool_choice: opts.toolChoice } : {}),
+        ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
+        ...(opts.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
+        ...(opts.passthrough !== undefined ? { passthrough: opts.passthrough } : {}),
+        emit: convEmit,
+        signal: opts.signal,
+        ...(opts.onChunk !== undefined ? { onChunk: opts.onChunk } : {}),
+      });
+
+      const finalUsage = step.usage;
+
       if (opts.conversationId !== undefined) {
         const id = `msg_${ulid()}`;
         const seq = this.nextSeq("messages", "conversation_id", opts.conversationId);
         this.dbx.db
           .insert(messages)
-          .values({ id, conversationId: opts.conversationId, runId, seq, role: "assistant", content: assembled.message as Message, createdAt: Date.now() })
+          .values({ id, conversationId: opts.conversationId, runId, seq, role: "assistant", content: step.message as Message, createdAt: Date.now() })
           .run();
         this.dbx.db.update(conversations).set({ updatedAt: Date.now() }).where(eq(conversations.id, opts.conversationId)).run();
-        emit("chat.final", `chat:${opts.conversationId}`, { message: assembled.message });
+        emit("chat.final", `chat:${opts.conversationId}`, { message: step.message });
       }
 
       this.bumpStatus(runId, "done");
       emit("run.status", chanRun, { runId, status: "done" });
-      return { runId, message: assembled.message, usage: finalUsage, finishReason: assembled.finishReason };
+      return { runId, message: step.message, usage: finalUsage, finishReason: step.finishReason };
     } catch (err) {
       // v0 aborts = cancelled (P2 formalizes run.cancel semantics).
       const cancelled = opts.signal.aborted;

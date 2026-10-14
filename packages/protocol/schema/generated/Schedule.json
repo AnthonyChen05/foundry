@@ -1,0 +1,83 @@
+{
+  "$id": "Schedule",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "kind",
+    "spec",
+    "prompt",
+    "enabled",
+    "nextRunAt",
+    "createdAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "kind": {
+      "description": "cron = 5-field cron spec; every = interval in seconds.",
+      "anyOf": [
+        {
+          "const": "cron",
+          "type": "string"
+        },
+        {
+          "const": "every",
+          "type": "string"
+        }
+      ]
+    },
+    "spec": {
+      "type": "string"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "model": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "targetChatId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "nextRunAt": {
+      "description": "ISO 8601; server-computed on create.",
+      "type": "string"
+    },
+    "lastRunId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "createdAt": {
+      "description": "ISO 8601.",
+      "type": "string"
+    }
+  },
+  "title": "Schedule"
+}

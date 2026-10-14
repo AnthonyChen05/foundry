@@ -15,6 +15,9 @@ export * from "./events.js";
 export * from "./methods.js";
 export * from "./registry.js";
 export * from "./chat.js";
+export * from "./run.js";
+export * from "./term.js";
+export * from "./files.js";
 
 import { type TSchema } from "@sinclair/typebox";
 import {
@@ -37,10 +40,38 @@ import {
 import { ProtocolErrorCodeSchema, ProtocolErrorSchema } from "./errors.js";
 import { ChannelSchema, EventFrameSchema, ReqFrameSchema, ResFrameSchema } from "./frames.js";
 import {
+  RunApproveParamsSchema,
+  RunCancelParamsSchema,
+  RunEventItemSchema,
+  RunEventsParamsSchema,
+  RunEventTypeSchema,
+  RunGetParamsSchema,
+} from "./run.js";
+import {
+  TermCloseParamsSchema,
+  TermInputParamsSchema,
+  TermOpenParamsSchema,
+  TermOpenResultSchema,
+  TermResizeParamsSchema,
+} from "./term.js";
+import {
+  FilesListParamsSchema,
+  FilesMkdirParamsSchema,
+  FilesReadParamsSchema,
+  FilesReadResultSchema,
+  FilesRmParamsSchema,
+  FilesStatParamsSchema,
+  FilesWriteParamsSchema,
+} from "./files.js";
+import {
   ContentPartSchema,
   FileEntrySchema,
   GatePolicySchema,
   GateSchema,
+  GateStateSchema,
+  HookCreateParamsSchema,
+  HookPayloadSchema,
+  HookSchema,
   MessageSchema,
   ModelCapsSchema,
   ModelSchema,
@@ -48,6 +79,10 @@ import {
   RunSchema,
   RunStatusSchema,
   RunTriggerSchema,
+  ScheduleCreateParamsSchema,
+  ScheduleKindSchema,
+  SchedulePatchParamsSchema,
+  ScheduleSchema,
   ToolCallSchema,
 } from "./shapes.js";
 import { EVENT_PAYLOAD_SCHEMA } from "./registry.js";
@@ -74,7 +109,15 @@ export const PROTOCOL_SCHEMAS: { name: string; schema: TSchema }[] = [
   { name: "ModelCaps", schema: ModelCapsSchema },
   { name: "Model", schema: ModelSchema },
   { name: "GatePolicy", schema: GatePolicySchema },
+  { name: "GateState", schema: GateStateSchema },
   { name: "Gate", schema: GateSchema },
+  { name: "ScheduleKind", schema: ScheduleKindSchema },
+  { name: "Schedule", schema: ScheduleSchema },
+  { name: "ScheduleCreateParams", schema: ScheduleCreateParamsSchema },
+  { name: "SchedulePatchParams", schema: SchedulePatchParamsSchema },
+  { name: "Hook", schema: HookSchema },
+  { name: "HookCreateParams", schema: HookCreateParamsSchema },
+  { name: "HookPayload", schema: HookPayloadSchema },
   { name: "FileEntry", schema: FileEntrySchema },
   { name: "ResumeEntry", schema: ResumeEntrySchema },
   { name: "ConnectParams", schema: ConnectParamsSchema },
@@ -88,6 +131,24 @@ export const PROTOCOL_SCHEMAS: { name: string; schema: TSchema }[] = [
   { name: "AuthLoginParams", schema: AuthLoginParamsSchema },
   { name: "AuthLoginResult", schema: AuthLoginResultSchema },
   { name: "ChatSendResult", schema: ChatSendResultSchema },
+  { name: "RunEventType", schema: RunEventTypeSchema },
+  { name: "RunEventItem", schema: RunEventItemSchema },
+  { name: "RunGetParams", schema: RunGetParamsSchema },
+  { name: "RunEventsParams", schema: RunEventsParamsSchema },
+  { name: "RunCancelParams", schema: RunCancelParamsSchema },
+  { name: "RunApproveParams", schema: RunApproveParamsSchema },
+  { name: "TermOpenParams", schema: TermOpenParamsSchema },
+  { name: "TermOpenResult", schema: TermOpenResultSchema },
+  { name: "TermInputParams", schema: TermInputParamsSchema },
+  { name: "TermResizeParams", schema: TermResizeParamsSchema },
+  { name: "TermCloseParams", schema: TermCloseParamsSchema },
+  { name: "FilesListParams", schema: FilesListParamsSchema },
+  { name: "FilesReadParams", schema: FilesReadParamsSchema },
+  { name: "FilesReadResult", schema: FilesReadResultSchema },
+  { name: "FilesWriteParams", schema: FilesWriteParamsSchema },
+  { name: "FilesMkdirParams", schema: FilesMkdirParamsSchema },
+  { name: "FilesRmParams", schema: FilesRmParamsSchema },
+  { name: "FilesStatParams", schema: FilesStatParamsSchema },
   ...Object.entries(EVENT_PAYLOAD_SCHEMA).map(([name, schema]) => ({
     name: `EventPayload.${name}`,
     schema,

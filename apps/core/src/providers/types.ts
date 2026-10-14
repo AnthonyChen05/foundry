@@ -96,6 +96,13 @@ export interface ProviderAdapter {
   ): AsyncIterable<ChatChunk>;
   /** Non-streaming path; implementers may build it from one streamed call. */
   chatOnce(req: ChatCompletionRequest, ctx: ProviderRequestContext): Promise<ChatCompletionResponse>;
+  /**
+   * Embeddings (P3 memory). `ctx.model` is the upstream embedding model; a
+   * missing method means the adapter cannot embed (memory falls back to the
+   * first embedding-capable provider). Implementations must return one vector
+   * per input, in input order.
+   */
+  embed?(texts: string[], ctx: ProviderRequestContext): Promise<number[][]>;
 }
 
 /** Adapter kinds (registry keys + db providers.kind). */

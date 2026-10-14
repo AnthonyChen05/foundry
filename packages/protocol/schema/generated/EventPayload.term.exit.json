@@ -6,8 +6,16 @@
   ],
   "properties": {
     "code": {
-      "minimum": 0,
-      "type": "integer"
+      "description": "Process exit code; null when the session was closed explicitly via term.close.",
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "title": "EventPayload.term.exit"

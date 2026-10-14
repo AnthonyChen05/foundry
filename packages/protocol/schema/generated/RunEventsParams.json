@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "required": [
+    "runId"
+  ],
+  "properties": {
+    "runId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "since": {
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$id": "RunEventsParams",
+  "title": "RunEventsParams"
+}

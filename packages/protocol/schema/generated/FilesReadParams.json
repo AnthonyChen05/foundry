@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "required": [
+    "path"
+  ],
+  "properties": {
+    "envId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "path": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "$id": "FilesReadParams",
+  "title": "FilesReadParams"
+}

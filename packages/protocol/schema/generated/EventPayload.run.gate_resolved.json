@@ -4,7 +4,8 @@
   "required": [
     "gateId",
     "approved",
-    "scope"
+    "scope",
+    "state"
   ],
   "properties": {
     "gateId": {
@@ -26,6 +27,27 @@
         },
         {
           "const": "always",
+          "type": "string"
+        }
+      ]
+    },
+    "state": {
+      "description": "Gate lifecycle: open → approved|denied|timeout.",
+      "anyOf": [
+        {
+          "const": "open",
+          "type": "string"
+        },
+        {
+          "const": "approved",
+          "type": "string"
+        },
+        {
+          "const": "denied",
+          "type": "string"
+        },
+        {
+          "const": "timeout",
           "type": "string"
         }
       ]

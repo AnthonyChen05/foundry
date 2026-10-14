@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "required": [
+    "path",
+    "content"
+  ],
+  "properties": {
+    "envId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "path": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "content": {
+      "type": "string"
+    },
+    "b64": {
+      "type": "boolean"
+    }
+  },
+  "$id": "FilesWriteParams",
+  "title": "FilesWriteParams"
+}

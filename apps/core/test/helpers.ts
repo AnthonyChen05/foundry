@@ -36,8 +36,9 @@ afterEach(async () => {
   }
 });
 
-/** Boot a full runtime on an ephemeral port in a fresh temp dir. */
-export async function startServer(): Promise<TestCtx> {
+/** Boot a full runtime on an ephemeral port in a fresh temp dir. Unit specs
+ * always get the fake sandbox driver; docker.spec.ts opts into the real one. */
+export async function startServer(overrides?: Partial<AppConfig>): Promise<TestCtx> {
   const dataDir = mkdtempSync(join(tmpdir(), "foundry-test-"));
   const config: AppConfig = {
     ...loadConfig(),
@@ -46,6 +47,9 @@ export async function startServer(): Promise<TestCtx> {
     dataDir,
     dbPath: join(dataDir, "foundry.db"),
     logLevel: "warn",
+    // Unit tests must never touch Docker even when the local daemon runs.
+    sandboxDriver: "fake",
+    ...overrides,
   };
   process.env.FOUNDRY_MASTER_KEY = MASTER_KEY;
   const vault = Vault.fromEnv();

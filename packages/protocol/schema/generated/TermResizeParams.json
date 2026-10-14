@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "required": [
+    "termId",
+    "cols",
+    "rows"
+  ],
+  "properties": {
+    "termId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "cols": {
+      "minimum": 2,
+      "maximum": 500,
+      "type": "integer"
+    },
+    "rows": {
+      "minimum": 2,
+      "maximum": 500,
+      "type": "integer"
+    }
+  },
+  "$id": "TermResizeParams",
+  "title": "TermResizeParams"
+}

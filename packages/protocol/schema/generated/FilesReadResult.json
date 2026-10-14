@@ -1,0 +1,16 @@
+{
+  "$id": "FilesReadResult",
+  "type": "object",
+  "required": [
+    "content"
+  ],
+  "properties": {
+    "content": {
+      "type": "string"
+    },
+    "b64": {
+      "type": "boolean"
+    }
+  },
+  "title": "FilesReadResult"
+}

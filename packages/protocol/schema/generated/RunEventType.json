@@ -1,0 +1,47 @@
+{
+  "description": "Append-only run event type.",
+  "$id": "RunEventType",
+  "anyOf": [
+    {
+      "const": "status",
+      "type": "string"
+    },
+    {
+      "const": "delta",
+      "type": "string"
+    },
+    {
+      "const": "tool_call",
+      "type": "string"
+    },
+    {
+      "const": "tool_result",
+      "type": "string"
+    },
+    {
+      "const": "gate_request",
+      "type": "string"
+    },
+    {
+      "const": "gate_resolved",
+      "type": "string"
+    },
+    {
+      "const": "usage",
+      "type": "string"
+    },
+    {
+      "const": "error",
+      "type": "string"
+    },
+    {
+      "const": "raw_provider_request",
+      "type": "string"
+    },
+    {
+      "const": "raw_provider_response",
+      "type": "string"
+    }
+  ],
+  "title": "RunEventType"
+}

@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "required": [
+    "termId",
+    "data"
+  ],
+  "properties": {
+    "termId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "data": {
+      "type": "string"
+    },
+    "b64": {
+      "type": "boolean"
+    }
+  },
+  "$id": "TermInputParams",
+  "title": "TermInputParams"
+}

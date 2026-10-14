@@ -1,0 +1,15 @@
+{
+  "description": "cron = 5-field cron spec; every = interval in seconds.",
+  "anyOf": [
+    {
+      "const": "cron",
+      "type": "string"
+    },
+    {
+      "const": "every",
+      "type": "string"
+    }
+  ],
+  "$id": "ScheduleKind",
+  "title": "ScheduleKind"
+}

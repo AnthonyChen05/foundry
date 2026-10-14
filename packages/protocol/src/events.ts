@@ -1,5 +1,5 @@
 import { type Static, Type } from "@sinclair/typebox";
-import { GateSchema, MessageSchema, RunStatusSchema } from "./shapes.js";
+import { GateSchema, GateStateSchema, MessageSchema, RunStatusSchema } from "./shapes.js";
 
 /**
  * Event payloads from protocol.md §1.4, keyed by event name.
@@ -55,6 +55,9 @@ export const RunStatusPayloadSchema = Type.Object(
     runId: Type.String(),
     status: RunStatusSchema,
     error: Type.Optional(Type.String()),
+    resumed: Type.Optional(
+      Type.Boolean({ description: "Set on the running transition when the loop resumed from the event log." }),
+    ),
   },
   { $id: "RunStatusPayload" },
 );
@@ -86,7 +89,7 @@ export const RunToolCallPayloadSchema = Type.Object(
 export type RunToolCallPayload = Static<typeof RunToolCallPayloadSchema>;
 
 export const RunToolResultPayloadSchema = Type.Object(
-  { callId: Type.String(), result: Type.Unknown(), ok: Type.Boolean() },
+  { id: Type.String(), ok: Type.Boolean(), content: Type.Unknown() },
   { $id: "RunToolResultPayload" },
 );
 
@@ -96,7 +99,9 @@ export type RunToolResultPayload = Static<typeof RunToolResultPayloadSchema>;
 export const GateRequestPayloadSchema = GateSchema;
 
 export const GateResolvedPayloadSchema = Type.Object(
-  { gateId: Type.String(), approved: Type.Boolean(), scope: GateScopeSchema },
+  // `state` landed in P3 (changelog): approved|denied|timeout — clients show
+  // why the call resolved (human approve vs auto-deny timeout).
+  { gateId: Type.String(), approved: Type.Boolean(), scope: GateScopeSchema, state: GateStateSchema },
   { $id: "GateResolvedPayload" },
 );
 
@@ -125,7 +130,12 @@ export const TermDataPayloadSchema = Type.Object(
 export type TermDataPayload = Static<typeof TermDataPayloadSchema>;
 
 export const TermExitPayloadSchema = Type.Object(
-  { code: Type.Integer({ minimum: 0 }) },
+  {
+    code: Type.Union(
+      [Type.Integer({ minimum: 0 }), Type.Null()],
+      { description: "Process exit code; null when the session was closed explicitly via term.close." },
+    ),
+  },
   { $id: "TermExitPayload" },
 );
 

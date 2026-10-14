@@ -1,0 +1,63 @@
+{
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "name",
+    "kind",
+    "spec",
+    "prompt"
+  ],
+  "properties": {
+    "name": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "kind": {
+      "description": "cron = 5-field cron spec; every = interval in seconds.",
+      "anyOf": [
+        {
+          "const": "cron",
+          "type": "string"
+        },
+        {
+          "const": "every",
+          "type": "string"
+        }
+      ]
+    },
+    "spec": {
+      "minLength": 1,
+      "description": "cron spec or seconds (integer ≥ 1) as a string.",
+      "type": "string"
+    },
+    "prompt": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "model": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "targetChatId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "enabled": {
+      "type": "boolean"
+    }
+  },
+  "$id": "ScheduleCreateParams",
+  "title": "ScheduleCreateParams"
+}

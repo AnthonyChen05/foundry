@@ -1,0 +1,37 @@
+{
+  "$id": "Hook",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "target",
+    "createdAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "target": {
+      "const": "chat",
+      "type": "string"
+    },
+    "model": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "createdAt": {
+      "description": "ISO 8601.",
+      "type": "string"
+    }
+  },
+  "title": "Hook"
+}

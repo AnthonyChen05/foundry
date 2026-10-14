@@ -28,7 +28,7 @@ export const RunStatusSchema = Type.Union(
 
 export type RunStatus = Static<typeof RunStatusSchema>;
 
-export const TRIGGERS = ["chat", "schedule", "webhook", "manual"] as const;
+export const TRIGGERS = ["chat", "schedule", "webhook", "manual", "sandbox"] as const;
 
 export type TriggerValue = (typeof TRIGGERS)[number];
 
@@ -196,6 +196,119 @@ export const GateSchema = Type.Object(
 );
 
 export type Gate = Static<typeof GateSchema>;
+
+export const GateStateSchema = Type.Union(
+  ["open", "approved", "denied", "timeout"].map((s) => Type.Literal(s)),
+  { description: "Gate lifecycle: open → approved|denied|timeout." },
+);
+
+export type GateState = Static<typeof GateStateSchema>;
+
+// ---------------------------------------------------------------------------
+// Schedule / Hook (P3 — REST admin CRUD + webhooks)
+// ---------------------------------------------------------------------------
+
+export const ScheduleKindSchema = Type.Union(
+  ["cron", "every"].map((k) => Type.Literal(k)),
+  { description: "cron = 5-field cron spec; every = interval in seconds." },
+);
+
+export type ScheduleKind = (typeof ScheduleKindSchema)["static"];
+
+export const ScheduleSchema = Type.Object(
+  {
+    id: Type.String(),
+    name: Type.String(),
+    kind: ScheduleKindSchema,
+    /** "0 9 * * 1-5" for cron; "900" (seconds) for every. */
+    spec: Type.String(),
+    /** Prompt sent to the agent run on each fire. */
+    prompt: Type.String(),
+    /** Wire-form model override (e.g. "dummy/scripted"); null → default model. */
+    model: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    /** Conversation the run attaches to; null → an auto-created schedule chat. */
+    targetChatId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    enabled: Type.Boolean(),
+    nextRunAt: Type.String({ description: "ISO 8601; server-computed on create." }),
+    lastRunId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    createdAt: Type.String({ description: "ISO 8601." }),
+  },
+  { $id: "Schedule" },
+);
+
+export type Schedule = Static<typeof ScheduleSchema>;
+
+export const ScheduleCreateParamsSchema = Type.Object(
+  {
+    name: Type.String({ minLength: 1 }),
+    kind: ScheduleKindSchema,
+    spec: Type.String({ minLength: 1, description: "cron spec or seconds (integer ≥ 1) as a string." }),
+    prompt: Type.String({ minLength: 1 }),
+    model: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    targetChatId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    enabled: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export type ScheduleCreateParams = Static<typeof ScheduleCreateParamsSchema>;
+
+export const SchedulePatchParamsSchema = Type.Object(
+  {
+    name: Type.Optional(Type.String({ minLength: 1 })),
+    prompt: Type.Optional(Type.String({ minLength: 1 })),
+    spec: Type.Optional(Type.String({ minLength: 1 })),
+    model: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    targetChatId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    enabled: Type.Optional(Type.Boolean()),
+    /** Recompute nextRunAt from now (used after editing spec or re-enabling). */
+    reschedule: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export type SchedulePatchParams = Static<typeof SchedulePatchParamsSchema>;
+
+export const HookSchema = Type.Object(
+  {
+    id: Type.String(),
+    name: Type.String(),
+    /** "chat" — the webhook body becomes an agent chat run. */
+    target: Type.Literal("chat"),
+    /** Wire-form model for triggered runs; null → default model. */
+    model: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    createdAt: Type.String({ description: "ISO 8601." }),
+  },
+  { $id: "Hook" },
+);
+
+export type Hook = Static<typeof HookSchema>;
+
+export const HookCreateParamsSchema = Type.Object(
+  {
+    name: Type.String({ minLength: 1 }),
+    /** Wire-form model for triggered runs; null → default model. */
+    model: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  },
+  { additionalProperties: false },
+);
+
+export type HookCreateParams = Static<typeof HookCreateParamsSchema>;
+
+/**
+ * Body of POST /hook/:hookId (public, HMAC-signed). `content` is the prompt;
+ * optional `title`/`model` override. The signature header covers the RAW body.
+ */
+export const HookPayloadSchema = Type.Object(
+  {
+    content: Type.String({ minLength: 1 }),
+    title: Type.Optional(Type.String()),
+    model: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  },
+  { additionalProperties: false },
+);
+
+export type HookPayload = Static<typeof HookPayloadSchema>;
 
 // ---------------------------------------------------------------------------
 // FileEntry

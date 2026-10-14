@@ -4,4 +4,3 @@
 process.env.FOUNDRY_DATA_DIR ??= "./.test-data";
 process.env.FOUNDRY_MASTER_KEY ??= "test-master-key-not-a-secret";
 process.env.FOUNDRY_LOG_LEVEL ??= "warn";
-delete process.env.FOUNDRY_INTEGRATION;

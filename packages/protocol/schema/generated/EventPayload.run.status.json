@@ -45,6 +45,10 @@
     },
     "error": {
       "type": "string"
+    },
+    "resumed": {
+      "description": "Set on the running transition when the loop resumed from the event log.",
+      "type": "boolean"
     }
   },
   "title": "EventPayload.run.status"

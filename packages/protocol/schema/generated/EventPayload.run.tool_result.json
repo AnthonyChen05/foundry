@@ -2,18 +2,18 @@
   "$id": "EventPayload.run.tool_result",
   "type": "object",
   "required": [
-    "callId",
-    "result",
-    "ok"
+    "id",
+    "ok",
+    "content"
   ],
   "properties": {
-    "callId": {
+    "id": {
       "type": "string"
     },
-    "result": {},
     "ok": {
       "type": "boolean"
-    }
+    },
+    "content": {}
   },
   "title": "EventPayload.run.tool_result"
 }

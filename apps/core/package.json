@@ -18,19 +18,25 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
   },
   "dependencies": {
+    "@fastify/static": "^10.1.6",
     "@fastify/websocket": "^11.0.0",
     "@foundry/protocol": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@sinclair/typebox": "^0.34.0",
     "better-sqlite3": "^12.0.0",
+    "dockerode": "^5.0.1",
     "drizzle-orm": "^0.44.0",
     "fastify": "^5.0.0",
     "pino": "^9.0.0",
-    "sqlite-vec": "^0.1.6"
+    "sqlite-vec": "^0.1.6",
+    "tar": "^7.5.22"
   },
   "devDependencies": {
     "@foundry/sdk-ts": "workspace:*",
     "@types/better-sqlite3": "^7.6.0",
+    "@types/dockerode": "^4.0.1",
     "@types/node": "^22.0.0",
+    "@types/tar": "^7.0.87",
     "tsx": "^4.0.0"
   }
 }
