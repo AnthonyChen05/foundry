@@ -12,6 +12,17 @@ import {
   ChatCreateParamsSchema,
   ChatHistoryParamsSchema,
   ChatSendParamsSchema,
+  TermOpenParamsSchema,
+  TermInputParamsSchema,
+  TermResizeParamsSchema,
+  TermCloseParamsSchema,
+  FilesListParamsSchema,
+  FilesReadParamsSchema,
+  FilesWriteParamsSchema,
+  FilesMkdirParamsSchema,
+  FilesRmParamsSchema,
+  FilesStatParamsSchema,
+  RunApproveParamsSchema,
   requiresIdempotencyKey,
 } from "@foundry/protocol";
 import type {
@@ -22,16 +33,22 @@ import type {
   ConnectParams,
   Message,
   ProtocolError,
+  RunApproveParams,
 } from "@foundry/protocol";
-import { and, eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import type { AppConfig } from "../config.js";
 import type { FoundryDb } from "../db/open.js";
 import { conversations, runs } from "../db/schema.js";
 import type { AuthService } from "../auth/auth.js";
 import { UnknownModelError } from "./chat.js";
 import { ProviderError } from "../providers/types.js";
+import { SandboxError } from "../sandbox/types.js";
 import type { ChatService } from "./chat.js";
 import type { ProviderStore } from "../providers/store.js";
+import { GateService } from "../agent/gates.js";
+import type { AgentRunner } from "../agent/runtime.js";
+import type { TermService } from "./term.js";
+import type { FilesService } from "./files.js";
 
 /**
  * WS hub (protocol.md §1): /ws — first frame MUST be `connect` (hard close
@@ -74,8 +91,9 @@ export class WsHub {
   private readonly idem = new Map<string, { expiresAt: number; payload: unknown }>();
   /** Same-idem requests racing while the first is in flight share this. */
   private readonly idemInFlight = new Map<string, Promise<Settled>>();
-  /** In-flight run aborters, runId → controller (run.cancel). */
-  private readonly inFlight = new Map<string, AbortController>();
+  /** In-flight run aborters, runId → controller (run.cancel). Shared with the
+   *  AgentRunner (cancellations registry) so resumed runs are cancellable. */
+  readonly inFlight = new Map<string, AbortController>();
 
   constructor(private readonly deps: {
     config: AppConfig;
@@ -84,7 +102,23 @@ export class WsHub {
     providers: ProviderStore;
     auth: AuthService;
     version: string;
+    /** Agent runtime — wired after construction (buildRuntime). */
+    agents?: AgentRunner;
+    /** Terminal service — wired after construction (buildRuntime). */
+    term?: TermService;
+    /** Client file plane — wired after construction (buildRuntime). */
+    files?: FilesService;
+    /** Approval gates (P3) — wired after construction (buildRuntime). */
+    gates?: GateService;
   }) {}
+
+  /** Late wiring: the hub is built before the services that need its maps. */
+  wireServices(services: { agents?: AgentRunner; term?: TermService; files?: FilesService; gates?: GateService }): void {
+    if (services.agents !== undefined) this.deps.agents = services.agents;
+    if (services.term !== undefined) this.deps.term = services.term;
+    if (services.files !== undefined) this.deps.files = services.files;
+    if (services.gates !== undefined) this.deps.gates = services.gates;
+  }
 
   // -- event publishing -------------------------------------------------------
 
@@ -371,7 +405,10 @@ export class WsHub {
         const runId = strParam(params, "runId");
         const run = this.deps.chat.getRun(runId);
         if (run === undefined) throw errOf("not_found", `unknown run: ${runId}`);
-        return run;
+        // Open gates ride along (P3) so a reconnecting client can render its
+        // approve/deny UI without replaying the whole timeline.
+        const openGates = this.deps.gates?.listForRun(runId) ?? [];
+        return openGates.length === 0 ? run : { ...run, gates: openGates.map((g) => GateService.toWire(g)) };
       }
       case "run.events": {
         const runId = strParam(params, "runId");
@@ -390,8 +427,87 @@ export class WsHub {
         controller.abort();
         return {};
       }
+      case "run.approve": {
+        if (!Value.Check(RunApproveParamsSchema, params)) throw errOf("bad_request", "invalid run.approve params");
+        if (this.deps.gates === undefined) throw errOf("internal", "gate service unavailable");
+        const p = params as RunApproveParams;
+        const row = this.deps.gates.resolve({
+          runId: p.runId,
+          gateId: p.gateId,
+          approve: p.approve,
+          ...(p.scope !== undefined ? { scope: p.scope } : {}),
+          by: conn.sessionId,
+        });
+        return GateService.toWire(row);
+      }
+      case "term.open": {
+        if (!Value.Check(TermOpenParamsSchema, params)) throw errOf("bad_request", "invalid term.open params");
+        if (this.deps.term === undefined) throw errOf("internal", "terminal service unavailable");
+        const t = params as { envId?: string };
+        return this.deps.term.open(conn.userId, t.envId);
+      }
+      case "term.input": {
+        if (!Value.Check(TermInputParamsSchema, params)) throw errOf("bad_request", "invalid term.input params");
+        if (this.deps.term === undefined) throw errOf("internal", "terminal service unavailable");
+        const t = params as { termId: string; data: string; b64?: boolean };
+        this.deps.term.input(conn.userId, t.termId, t.data, t.b64);
+        return {};
+      }
+      case "term.resize": {
+        if (!Value.Check(TermResizeParamsSchema, params)) throw errOf("bad_request", "invalid term.resize params");
+        if (this.deps.term === undefined) throw errOf("internal", "terminal service unavailable");
+        const t = params as { termId: string; cols: number; rows: number };
+        this.deps.term.resize(conn.userId, t.termId, t.cols, t.rows);
+        return {};
+      }
+      case "term.close": {
+        if (!Value.Check(TermCloseParamsSchema, params)) throw errOf("bad_request", "invalid term.close params");
+        if (this.deps.term === undefined) throw errOf("internal", "terminal service unavailable");
+        const t = params as { termId: string };
+        await this.deps.term.close(conn.userId, t.termId);
+        return {};
+      }
+      case "files.list": {
+        if (!Value.Check(FilesListParamsSchema, params)) throw errOf("bad_request", "invalid files.list params");
+        if (this.deps.files === undefined) throw errOf("internal", "file service unavailable");
+        const t = params as { envId?: string; path: string };
+        return this.deps.files.list(conn.userId, t.envId, t.path);
+      }
+      case "files.read": {
+        if (!Value.Check(FilesReadParamsSchema, params)) throw errOf("bad_request", "invalid files.read params");
+        if (this.deps.files === undefined) throw errOf("internal", "file service unavailable");
+        const t = params as { envId?: string; path: string };
+        return this.deps.files.read(conn.userId, t.envId, t.path);
+      }
+      case "files.write": {
+        if (!Value.Check(FilesWriteParamsSchema, params)) throw errOf("bad_request", "invalid files.write params");
+        if (this.deps.files === undefined) throw errOf("internal", "file service unavailable");
+        const t = params as { envId?: string; path: string; content: string; b64?: boolean };
+        await this.deps.files.write(conn.userId, t.envId, t.path, t.content, t.b64);
+        return {};
+      }
+      case "files.mkdir": {
+        if (!Value.Check(FilesMkdirParamsSchema, params)) throw errOf("bad_request", "invalid files.mkdir params");
+        if (this.deps.files === undefined) throw errOf("internal", "file service unavailable");
+        const t = params as { envId?: string; path: string; recursive?: boolean };
+        await this.deps.files.mkdir(conn.userId, t.envId, t.path, t.recursive);
+        return {};
+      }
+      case "files.rm": {
+        if (!Value.Check(FilesRmParamsSchema, params)) throw errOf("bad_request", "invalid files.rm params");
+        if (this.deps.files === undefined) throw errOf("internal", "file service unavailable");
+        const t = params as { envId?: string; path: string; recursive?: boolean };
+        await this.deps.files.rm(conn.userId, t.envId, t.path, t.recursive);
+        return {};
+      }
+      case "files.stat": {
+        if (!Value.Check(FilesStatParamsSchema, params)) throw errOf("bad_request", "invalid files.stat params");
+        if (this.deps.files === undefined) throw errOf("internal", "file service unavailable");
+        const t = params as { envId?: string; path: string };
+        return this.deps.files.stat(conn.userId, t.envId, t.path);
+      }
       default:
-        throw errOf("bad_request", `unknown method: ${method} (P2 adds run.approve, term.*, files.*)`);
+        throw errOf("bad_request", `unknown method: ${method}`);
     }
   }
 
@@ -408,14 +524,49 @@ export class WsHub {
       throw errOf("bad_request", "no model: pass model or create the chat with one");
     }
 
+    const agentRun = p.agent?.enabled === true;
+    if (agentRun && this.deps.agents === undefined) {
+      throw errOf("bad_request", "agent runtime unavailable");
+    }
+
     const controller = new AbortController();
     const runId = this.deps.chat.createRun({
       userId: conn.userId,
       conversationId: p.chatId,
       model,
       trigger: "chat",
+      ...(agentRun ? { agent: true } : {}),
     });
     this.inFlight.set(runId, controller);
+    const emit: (event: string, channel: string, payload: unknown) => void = (event, channel, payload) =>
+      this.publish(event, channel, payload);
+
+    const finish = (): void => {
+      this.inFlight.delete(runId);
+    };
+
+    if (agentRun) {
+      // Agent run: respond {runId} now; the loop streams run.* timeline events
+      // and appends assistant/tool messages server-side (chat.final on done).
+      const agents = this.deps.agents;
+      if (agents === undefined) throw errOf("bad_request", "agent runtime unavailable");
+      const toolPolicy =
+        p.agent?.toolPolicy !== undefined && typeof p.agent.toolPolicy === "object" && !Array.isArray(p.agent.toolPolicy)
+          ? (p.agent.toolPolicy as Record<string, unknown>)
+          : undefined;
+      void agents
+        .startRun({
+          runId,
+          userId: conn.userId,
+          wireModel: model,
+          conversationId: p.chatId,
+          emit,
+          signal: controller.signal,
+          ...(toolPolicy !== undefined ? { toolPolicy } : {}),
+        })
+        .then(finish, finish);
+      return { runId, conversationId: p.chatId };
+    }
 
     // Async — chat.send responds immediately; deltas stream as events.
     const history = this.deps.chat.history(p.chatId, undefined, 50).map(canonicalMessage);
@@ -427,11 +578,10 @@ export class WsHub {
         runId,
         conversationId: p.chatId,
         trigger: "chat",
-        emit: (event, channel, payload) => this.publish(event, channel, payload),
+        emit,
         signal: controller.signal,
       })
-      .then(() => this.inFlight.delete(runId))
-      .catch(() => this.inFlight.delete(runId));
+      .then(finish, finish);
     return { runId, conversationId: p.chatId };
   }
 
@@ -446,10 +596,11 @@ export class WsHub {
   }
 
   private activeRunIds(): string[] {
+    // waiting_approval counts as active: a parked run needs its gate resolved.
     return this.deps.dbx.db
       .select({ id: runs.id })
       .from(runs)
-      .where(eq(runs.status, "running"))
+      .where(or(eq(runs.status, "running"), eq(runs.status, "waiting_approval")))
       .all()
       .map((r) => `run:${r.id}`);
   }
@@ -513,6 +664,10 @@ function errOf(code: ProtocolError["code"], message: string): Error & { protocol
 function toProtocolError(err: unknown): ProtocolError {
   if (err !== null && typeof err === "object" && "protocolError" in err) {
     return (err as { protocolError: ProtocolError }).protocolError;
+  }
+  if (err instanceof SandboxError) {
+    const code: ProtocolError["code"] = err.status === 404 ? "not_found" : err.status === 400 ? "bad_request" : err.status === 401 ? "unauthorized" : "internal";
+    return { code, message: err.message };
   }
   if (err instanceof ProviderError || err instanceof UnknownModelError) {
     const code: ProtocolError["code"] = err.status === 401 ? "unauthorized"

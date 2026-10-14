@@ -1,0 +1,1 @@
+ALTER TABLE `hooks` ADD `secret_vault_id` text;

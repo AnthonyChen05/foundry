@@ -1,0 +1,1 @@
+ALTER TABLE `hooks` DROP COLUMN `secret_hash`;
