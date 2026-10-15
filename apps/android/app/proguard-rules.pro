@@ -1,0 +1,1 @@
+# Foundry Android client — v1 ships minify-disabled; rules kept for later.

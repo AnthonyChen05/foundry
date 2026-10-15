@@ -123,6 +123,24 @@ LLM inspects the workspace and the chat's shell history (run_events) and
 reinstalls what is missing; on done the binding flips to `"cloud"`
 (`sys.resync` to clients). Failures keep the chat local.
 
+### First-party clients
+
+All are thin views + command senders over server-authoritative state (the
+sync-engine directive): no client owns truth; every screen reads what events
+and refetches say, and `sys.resync` triggers a refetch.
+
+- **Web** (`apps/web`, SvelteKit) — served same-origin by core; store in
+  `src/lib/foundry.svelte.ts`.
+- **Windows/desktop** (`apps/desktop`, Tauri shell) — first-run picker, then
+  the core web UI same-origin; the bundled runner (`apps/runner`) is the
+  ADR-015 executor.
+- **Android** (`apps/android`, Kotlin + Compose) — StateFlow port of the web
+  store; WS via OkHttp with resume cursors + backoff reconnect; password
+  login (ADR-014), chats/drafts, timeline with gate resolution, PTY
+  terminal, files, exec-location chip + push-to-cloud; system notifications
+  for `notify.push` and a self-hosted ntfy stream subscription (ADR-009).
+  Regular client only — never an executor.
+
 ## 3. Key data flows
 
 **(a) Plain chat (no agent):** client → `chat.send` (WS) or `POST

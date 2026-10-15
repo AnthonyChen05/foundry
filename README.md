@@ -106,6 +106,13 @@ no separate deployment; `FOUNDRY_WEB_DIR` overrides the build dir, and absent
 a build core runs API-only. Dev mode: `pnpm --filter @foundry/web dev` proxies
 to the core on 127.0.0.1:8787.
 
+Android: `apps/android` (Kotlin + Compose) is a thin view over the same WS
+plane — password login, streaming chats, run timeline with gate approve/deny
+(once/session/always), a PTY terminal, a file browser, and the per-chat
+exec-location chip with push-to-cloud; pushes surface via `notify.push` and a
+self-hosted ntfy stream subscription. Build & install with Gradle
+(`./gradlew :app:installDebug`) — see `apps/android/README.md`.
+
 Agent runs: send `chat.send` with `agent: true` over WS — the loop streams
 `run.*` timeline events (`run.tool_call` / `run.tool_result` / `run.status`),
 executes tools inside the sandbox container, takes a workspace snapshot at run

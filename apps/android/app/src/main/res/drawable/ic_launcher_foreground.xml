@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Blocky "F" mark over the dark forge background. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:scaleX="0.6" android:scaleY="0.6" android:pivotX="54" android:pivotY="54">
+        <path
+            android:fillColor="#E8E4DC"
+            android:pathData="M34,22 L86,22 L86,38 L50,38 L50,48 L78,48 L78,64 L50,64 L50,86 L34,86 Z" />
+        <path
+            android:fillColor="#F59E0B"
+            android:pathData="M34,86 L86,86 L86,94 L34,94 Z" />
+    </group>
+</vector>
