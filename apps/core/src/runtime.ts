@@ -22,11 +22,14 @@ import { MemoryService } from "./agent/memory.js";
 import { SchedulerService } from "./agent/schedules.js";
 import { NotifyService } from "./gateway/notify.js";
 import { HookService } from "./gateway/hooks.js";
-import { runs } from "./db/schema.js";
+import { runs, envs, workspaces } from "./db/schema.js";
 import { eq } from "drizzle-orm";
 import { TermService } from "./gateway/term.js";
 import { FilesService } from "./gateway/files.js";
 import { registerWeb, resolveWebDir } from "./gateway/web.js";
+import { ExecutorRegistry } from "./executor/registry.js";
+import { LocalExecutorDriver } from "./executor/local_driver.js";
+import { PushService } from "./executor/push.js";
 
 /**
  * Wire-up shared by `main.ts`, tests, and the smoke script: services, routes,
@@ -58,6 +61,8 @@ export interface FoundryRuntime {
   mcp: McpManager;
   term: TermService;
   files: FilesService;
+  /** Executor plane (ADR-015) — the desktop runner's per-user registry. */
+  executor: ExecutorRegistry;
   app: FastifyInstance;
   /** Stop background work (sandbox reaper, MCP transports) on shutdown. */
   shutdownServices(): Promise<void>;
@@ -82,7 +87,26 @@ export async function buildRuntime(deps: {
   const driver = await makeDriver(config, {
     warn: (o, m) => logger?.warn(o, m),
   });
-  const sandbox = new SandboxService(config, db, blobs, driver);
+  // Executor plane (ADR-015): the desktop runner's WS connection backs a
+  // delegating SandboxDriver for local envs; registry status events ride the
+  // sys channel so any client can show presence.
+  const executorRegistry = new ExecutorRegistry();
+  executorRegistry.onExecutorStatus = (info) => {
+    hub.publish("executor.status", "sys", info);
+  };
+  const executorDriver = new LocalExecutorDriver({
+    registry: executorRegistry,
+    userFor: (envId) => {
+      const row = db.db.select({ workspaceId: envs.workspaceId }).from(envs).where(eq(envs.id, envId)).get();
+      if (row?.workspaceId === undefined || row.workspaceId === null) return undefined;
+      return db.db.select({ userId: workspaces.userId }).from(workspaces).where(eq(workspaces.id, row.workspaceId)).get()?.userId;
+    },
+    log: (obj, msg) => logger?.info(obj, msg ?? ""),
+  });
+  const sandbox = new SandboxService(config, db, blobs, driver, {
+    executorDriver,
+    registry: executorRegistry,
+  });
   const mcp = new McpManager({ dbx: db, log: logLog });
   const app = await buildApp({ config, db, vault });
   const hub = new WsHub({ config, dbx: db, chat, providers, auth, version });
@@ -128,6 +152,7 @@ export async function buildRuntime(deps: {
 
   const scheduler = new SchedulerService({ dbx: db, chat, providers, agents, config, emit, notify, log: logLog });
   const hooks = new HookService({ dbx: db, vault, chat, providers, agents, emit, notify, log: logLog });
+  const push = new PushService({ config, dbx: db, chat, sandbox, blobs, registry: executorRegistry, agents, notify, emit, log: logLog });
 
   hub.wireServices({ agents, gates });
   registerRest(app, {
@@ -139,6 +164,7 @@ export async function buildRuntime(deps: {
     mcp,
     schedules: scheduler,
     hooks,
+    push,
     onMcpServersChanged: () => void mcp.reload().catch((err) => logLog({ err: String(err) }, "mcp reload after admin PUT failed")),
   });
   // Egress plane (ADR-005): sandbox containers' only route back in.
@@ -155,7 +181,7 @@ export async function buildRuntime(deps: {
   }
   const term = new TermService({ sandbox, emit, log: logLog });
   const files = new FilesService({ sandbox });
-  hub.wireServices({ agents, term, files });
+  hub.wireServices({ agents, gates, term, files, executor: { registry: executorRegistry, driver: executorDriver } });
   sandbox.startReaper();
   scheduler.start();
 
@@ -199,6 +225,7 @@ export async function buildRuntime(deps: {
     mcp,
     term,
     files,
+    executor: executorRegistry,
     app,
     shutdownServices,
   };
@@ -208,6 +235,8 @@ export interface BootstrapResult {
   userId: string;
   /** Plaintext ONLY on first boot (root key auto-minted); undefined after. */
   rootKey?: IssuedKey;
+  /** Owner credentials ONLY on the boot that initialized them (ADR-006). */
+  adminCredentials?: { username: string; password: string };
 }
 
 /** Narrow log surface for bootstrap (pino or a trivial silent impl). */
@@ -217,8 +246,10 @@ export interface BootstrapLog {
 
 /**
  * First-boot bootstrap: owner user + one root admin key (written to
- * admin_key.txt under the data dir, whose path — never the key — is logged)
- * + the dummy provider seed. Idempotent on every later boot.
+ * admin_key.txt, whose path — never the key — is logged) + owner credentials
+ * (username/password; generated password written to admin_credentials.txt,
+ * whose path is logged) + the dummy provider seed. Idempotent on every later
+ * boot: neither file is rewritten once the underlying rows exist.
  */
 export async function bootstrapServices(
   db: FoundryDb,
@@ -241,6 +272,28 @@ export async function bootstrapServices(
     writeFileSync(keyPath, `${rootKey.plaintext}\n`);
     log.warn({ path: keyPath }, "root admin key auto-minted at first boot — file contains the ONLY copy");
   }
+  // User-facing credentials (ADR-006): backfill username+password when the
+  // owner user has none. Env-provided password is used as-is and NOT written
+  // to a file; a generated one goes to admin_credentials.txt (only copy).
+  const initialUsername = config.adminUser;
+  const initialPassword = config.adminPassword ?? randomBytes(24).toString("base64url");
+  const initialized = await auth.ensureUserCredentials(initialUsername, initialPassword);
+  if (initialized) {
+    const credsPath = join(resolve(config.dataDir), "admin_credentials.txt");
+    if (config.adminPassword === undefined) {
+      writeFileSync(
+        credsPath,
+        `username: ${initialUsername}\npassword: ${initialPassword}\n`,
+      );
+      log.warn({ path: credsPath }, "admin credentials initialized — file contains the ONLY copy of the generated password");
+    } else {
+      log.warn({ user: initialUsername }, "admin credentials initialized from FOUNDRY_ADMIN_PASSWORD");
+    }
+  }
   providers.seedDummy();
-  return { userId: boot.userId, ...(rootKey !== undefined ? { rootKey } : {}) };
+  return {
+    userId: boot.userId,
+    ...(rootKey !== undefined ? { rootKey } : {}),
+    ...(initialized ? { adminCredentials: { username: initialUsername, password: initialPassword } } : {}),
+  };
 }

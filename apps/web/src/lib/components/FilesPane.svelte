@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { idem, socket } from "$lib/foundry.svelte";
+  import { activeChatBinding, idem, socket } from "$lib/foundry.svelte";
 
   let path = $state(".");
   let rows = $state<{ path: string; size: number; mtime: string; isDir: boolean }[]>([]);
@@ -33,7 +33,12 @@
     void run(async () => {
       path = p;
       viewing = undefined;
-      rows = await socket().filesList({ path: p });
+      // ADR-015: read the ACTIVE CHAT's env when it is bound (local chats hit
+      // the desktop sandbox); default = the user's primary backend env.
+      const bind = activeChatBinding();
+      rows = await socket().filesList(
+        { path: p, ...(bind.envId !== undefined ? { envId: bind.envId } : {}) },
+      );
     });
   }
 

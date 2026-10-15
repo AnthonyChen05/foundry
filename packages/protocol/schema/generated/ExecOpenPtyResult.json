@@ -1,0 +1,14 @@
+{
+  "$id": "ExecOpenPtyResult",
+  "type": "object",
+  "required": [
+    "ptyId"
+  ],
+  "properties": {
+    "ptyId": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "title": "ExecOpenPtyResult"
+}

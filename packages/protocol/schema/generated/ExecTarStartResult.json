@@ -1,0 +1,24 @@
+{
+  "$id": "ExecTarStartResult",
+  "type": "object",
+  "required": [
+    "tarId",
+    "size",
+    "chunkSize"
+  ],
+  "properties": {
+    "tarId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "size": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "chunkSize": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "title": "ExecTarStartResult"
+}

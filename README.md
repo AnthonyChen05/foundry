@@ -69,9 +69,18 @@ admin REST, missed ticks coalesce), **webhooks** (`POST /hook/:id`, HMAC over
 the raw body, secret shown once), **long-term memory** (`memory` agent tool,
 sqlite-vec top-k injection into agent runs), and **ntfy push** (run
 done/failed, gate open) — plus the **P4 client layer**: `@foundry/sdk-ts` (typed
-WS + REST + auto-reconnect) and a **web app** (SvelteKit 2 + Svelte 5 SPA:
+WS + REST + auto-reconnect), a **web app** (SvelteKit 2 + Svelte 5 SPA:
 chat with live streaming, run timeline with approve/deny gates, terminal
-(xterm.js), file browser, settings), served by core from the same origin.
+(xterm.js), file browser, settings), served by core from the same origin, and
+a **desktop/Windows shell** (`apps/desktop`, Tauri: a thin native window that
+loads the core's origin — first-run server-URL picker, no exposed APIs) with
+**dynamic container support** (ADR-015): pick per chat whether the agent's
+terminal/files/commands run in the **backend's** sandbox or in a **local
+sandbox** on your own machine — an Open Terminal container on your Docker
+Desktop, driven by `@foundry/runner` over WS — and **push to cloud** when a
+local chat should move: the runner's workspace is tared into the backend env
+and a reconcile run reconstructs the dependencies you installed along the way
+(the LLM reads the chat's shell history and reinstalls them).
 
 ```sh
 pnpm install                       # first time
@@ -84,11 +93,15 @@ FOUNDRY_INTEGRATION=1 pnpm test    # with Docker: real open-terminal sandbox
 pnpm smoke                         # REST SSE + WS chat + replay + SPA + gated run
 ```
 
-Web app: open `http://127.0.0.1:8787/` — sign in with an API key (`fnd_…`, the
-auto-minted admin key prints at first boot), and you get chat with streaming,
+Web app: open `http://127.0.0.1:8787/` — sign in with your username + password
+(ADR-014: first boot creates the owner account — username from
+`FOUNDRY_ADMIN_USER`, default `admin`; the generated password lands in
+`data/admin_credentials.txt`, the only copy), and you get chat with streaming,
 the run timeline (approve/deny gate cards, live tool events), a terminal, a
 file browser over the sandbox workspace, and settings (providers, keys,
-schedules, webhooks, MCP). Core serves the SPA from the same origin — no CORS,
+account, schedules, webhooks, MCP). API keys remain the Bearer credential for
+programmatic OpenAI-compatible clients (`/v1/chat/completions`); they are not
+a login method. Core serves the SPA from the same origin — no CORS,
 no separate deployment; `FOUNDRY_WEB_DIR` overrides the build dir, and absent
 a build core runs API-only. Dev mode: `pnpm --filter @foundry/web dev` proxies
 to the core on 127.0.0.1:8787.

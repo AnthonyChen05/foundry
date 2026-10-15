@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { startServer, type TestCtx } from "./helpers.js";
+import { TEST_ADMIN_PASSWORD, startServer, type TestCtx } from "./helpers.js";
 
 let ctx: TestCtx;
 
@@ -39,21 +39,31 @@ describe("REST auth + keys", () => {
     expect(health.status).toBe(200); // open endpoint
   });
 
-  it("auth.login issues a session token that verifies", async () => {
-    const { status, body } = await jso("POST", "/v1/auth/login", "", { apiKey: ctx.server.token });
+  it("auth.login issues a session token that verifies (username + password)", async () => {
+    const { status, body } = await jso("POST", "/v1/auth/login", "", {
+      username: "admin",
+      password: TEST_ADMIN_PASSWORD,
+    });
     expect(status).toBe(200);
     const sessionToken = body.sessionToken as string;
     expect(sessionToken).toMatch(/^fnds_/);
     const user = ctx.server.rt.auth.verifyToken(sessionToken);
     expect(user).toBeDefined();
-    // login with a session token also works (tokens verify as keys)
-    const again = await jso("POST", "/v1/auth/login", "", { apiKey: sessionToken });
+    // Logging in again (fresh login, same credentials) also verifies.
+    const again = await jso("POST", "/v1/auth/login", "", {
+      username: "admin",
+      password: TEST_ADMIN_PASSWORD,
+    });
     expect(again.status).toBe(200);
   });
 
-  it("auth.login rejects bad keys", async () => {
-    const bad = await jso("POST", "/v1/auth/login", "", { apiKey: "nope" });
-    expect(bad.status).toBe(401);
+  it("auth.login rejects bad credentials and the removed key shape", async () => {
+    const badPw = await jso("POST", "/v1/auth/login", "", { username: "admin", password: "nope" });
+    expect(badPw.status).toBe(401);
+    const keyShape = await jso("POST", "/v1/auth/login", "", { apiKey: ctx.server.token });
+    expect(keyShape.status).toBe(400);
+    const empty = await jso("POST", "/v1/auth/login", "", { username: "", password: "" });
+    expect(empty.status).toBe(400);
   });
 
   it("mints, lists and revokes API keys — plaintext shown exactly once", async () => {

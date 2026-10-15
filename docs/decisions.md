@@ -114,3 +114,42 @@ now-unparseable spec disables the row without ever firing. Run creation is
 fire-and-forget; a failure only logs (the occurrence was already consumed).
 Cron is local-time, 5-field, POSIX semantics including the DOM/DOW
 both-restricted OR rule and `dow 7 == 0`.
+
+## ADR-014 — User-facing auth is username+password; API keys stay programmatic-only
+Accepted 2026-10-13 (owner directive). `auth.login` (WS + REST) no longer
+exchanges an API key for a session: it verifies a username + password
+(scrypt N=2^15/r=8/p=1, 16-byte salt, NFKC-normalized; timing-safe compare)
+and issues a 30-day session. API keys remain a distinct credential class that
+authenticates Bearer REST and WS `connect` — required by the mission line
+"any OpenAI-compatible client" (Open WebUI et al. cannot do an interactive
+login) — but they are not a login method and cannot mint themselves a
+session. First boot backfills username (FOUNDRY_ADMIN_USER, default "admin")
++ password (FOUNDRY_ADMIN_PASSWORD, else generated → admin_credentials.txt,
+only copy) onto the owner user; bootstrap is idempotent and never rotates an
+existing password (password change = `POST /v1/auth/password`, self-service).
+Migration 0006 adds nullable `users.username`/`users.password_hash` with a
+unique index (SQLite treats NULLs as distinct, so legacy rows coexist).
+
+## ADR-015 — Desktop-local execution over the executor bridge; push-to-cloud is env migration
+Accepted 2026-10-13 (owner directive: local terminal / backend / push-to-cloud for the
+desktop build). Core keeps owning the agent loop, runs, envs and truth (the sync-engine
+directive); the desktop contributes an **executor** — a runner process whose WS connection
+answers server→client `req` frames (`exec.env.*`, `exec.exec(+cancel)`, `exec.openPty`,
+`exec.pty.write/resize/close`, `exec.files.*`, `exec.tar.start/chunk/free`, none
+idem-reqired) after `exec.register` marks it the user's executor (latest wins). Core wraps
+it in `LocalExecutorDriver implements SandboxDriver` (`name: "executor"`), so agent tools,
+term and files are untouched: local envs are chat-scoped (`conversations.meta {location,
+envId}`, `envs.workspace_dir` = the runner-side dir, `runs.env_id`); no egress tokens or
+`OPENAI_BASE_URL` for local envs (the container never calls an LLM) and no
+`OPEN_TERMINAL_ALLOWED_DOMAINS` (OT refuses to start without ipset on Docker Desktop —
+**local egress is open**, a documented deviation scoped to the user's own machine via the
+same driver #3 caps/no-socket rules). A dead local env (executor drop, container death,
+TTL) is transparently re-materialized over the same chat dir — files survive everything
+except explicit destroy; the runner sweeps orphaned labeled containers at boot. Local runs
+skip end-of-run snapshots (push-to-cloud is the archival path), and runs still respect
+gates. Push = `POST /v1/chats/:chatId/push`: pull a tar of the chat's local workspace (via
+`exec.tar.*`, excluding node_modules/.venv — deps are RECONSTRUCTED), store the blob, then
+an agent run (trigger "manual" = operator-initiated) in the same conversation, prompted
+with the shell command history recorded in run_events, is instructed to inspect the
+workspace, reinstall what is missing and verify; on done the binding flips to `"cloud"`
+and `sys.resync` tells clients to refetch. Failures/cancel keep the chat local.

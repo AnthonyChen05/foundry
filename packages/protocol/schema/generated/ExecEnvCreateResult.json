@@ -1,0 +1,16 @@
+{
+  "$id": "ExecEnvCreateResult",
+  "type": "object",
+  "required": [
+    "workspaceDir"
+  ],
+  "properties": {
+    "containerRef": {
+      "type": "string"
+    },
+    "workspaceDir": {
+      "type": "string"
+    }
+  },
+  "title": "ExecEnvCreateResult"
+}

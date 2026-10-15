@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "The bundled first-run page may call the shell's two commands (server URL pick/save). The remotely-loaded SPA at the core's origin gets NO commands — it talks to the core over WS/REST on its own origin.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

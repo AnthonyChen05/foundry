@@ -1,15 +1,16 @@
 <script lang="ts">
-  import { app, loginWithKey } from "$lib/foundry.svelte";
+  import { app, loginWithPassword } from "$lib/foundry.svelte";
 
-  let apiKey = $state("");
+  let username = $state("admin");
+  let password = $state("");
   let busy = $state(false);
 
   async function submit(e: SubmitEvent): Promise<void> {
     e.preventDefault();
-    if (busy || apiKey.trim().length === 0) return;
+    if (busy || username.trim().length === 0 || password.length === 0) return;
     busy = true;
     try {
-      await loginWithKey(apiKey);
+      await loginWithPassword(username, password);
     } finally {
       busy = false;
     }
@@ -24,18 +25,26 @@
       </svg>
     </span>
     <h1>Foundry</h1>
-    <p class="muted">Self-hosted LLM backend. Sign in with an API key (<code>fnd_…</code>) to mint a session.</p>
+    <p class="muted">Self-hosted LLM backend. Sign in with your username and password to start a session (lasts 30 days).</p>
+    <input
+      type="text"
+      placeholder="username"
+      autocomplete="username"
+      spellcheck="false"
+      bind:value={username}
+      disabled={busy}
+    />
     <input
       type="password"
-      placeholder="API key"
+      placeholder="password"
       autocomplete="current-password"
-      bind:value={apiKey}
+      bind:value={password}
       disabled={busy}
     />
     {#if app.connError !== ""}
       <p class="error-text">{app.connError}</p>
     {/if}
-    <button class="primary" type="submit" disabled={busy || apiKey.trim().length === 0}>
+    <button class="primary" type="submit" disabled={busy || username.trim().length === 0 || password.length === 0}>
       {busy ? "Signing in…" : "Sign in"}
     </button>
   </form>

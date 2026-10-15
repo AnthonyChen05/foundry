@@ -11,6 +11,10 @@ export const ChatSummarySchema = Type.Object(
     id: Type.String(),
     title: Type.String(),
     model: Type.Optional(Type.String()),
+    /** Where execution is bound (ADR-015 desktop executor plane). Additive v0. */
+    location: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("cloud")])),
+    /** The chat's currently-bound env (local chats bind their desktop env). */
+    envId: Type.Optional(Type.String()),
     createdAt: Type.String({ description: "ISO 8601." }),
     updatedAt: Type.String({ description: "ISO 8601." }),
   },
@@ -36,6 +40,11 @@ export const ChatSendParamsSchema = Type.Object({
     Type.Object({
       enabled: Type.Boolean(),
       toolPolicy: Type.Optional(Type.Unknown()),
+      location: Type.Optional(
+        Type.Union([Type.Literal("local"), Type.Literal("cloud")], {
+          description: "Where tool calls execute (ADR-015): 'local' = the client's desktop executor, absent/cloud = the backend sandbox.",
+        }),
+      ),
     }),
   ),
   // NOTE: `idem` rides on the frame itself (protocol.md §1.1), not in params —
@@ -54,7 +63,8 @@ export const ChatHistoryParamsSchema = Type.Object({
 export type ChatHistoryParams = Static<typeof ChatHistoryParamsSchema>;
 
 export const AuthLoginParamsSchema = Type.Object({
-  apiKey: Type.String(),
+  username: Type.String({ description: "Login username (self-hosted default: admin)." }),
+  password: Type.String({ description: "Login password (plaintext on the wire over localhost/Tailscale; hashed at rest with scrypt)." }),
 });
 
 export type AuthLoginParams = Static<typeof AuthLoginParamsSchema>;

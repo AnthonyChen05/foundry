@@ -40,7 +40,8 @@ foundry/
 ├── packages/protocol/              # TypeBox schemas, wire types, PROTOCOL_VERSION
 ├── packages/sdk-ts/                # thin client SDK (WS + REST) for all frontends
 ├── apps/core/                      # THE monolith: gateway, providers, agent, sandbox, storage
-└── apps/web/                       # (P4) SvelteKit web app
+├── apps/web/                       # (P4) SvelteKit web app
+└── apps/desktop/                   # (P4) Tauri Windows/desktop shell over the web app UI
 ```
 
 **Monolith-first. Do NOT split into microservices.** One Node process plus

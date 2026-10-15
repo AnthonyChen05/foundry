@@ -10,7 +10,7 @@
  * touch anything outside its workspace dir.
  */
 
-export type DriverName = "open_terminal" | "docker" | "fake";
+export type DriverName = "open_terminal" | "docker" | "fake" | "executor";
 
 /** Resource caps (guardrail #3). */
 export interface Caps {
@@ -71,6 +71,14 @@ export interface CreateEnvOpts {
   env?: Record<string, string>;
   caps?: Partial<Caps>;
   image?: string;
+  /** Core-minted env id (executor path preserves envId == DB row id). Cloud drivers ignore. */
+  envId?: string;
+  /** Workspace-dir key on the runner side (the owning chat, executor path only). */
+  chatId?: string;
+  /** Owning user (executor path — the row may not exist yet at create time). */
+  userId?: string;
+  /** Extra Docker labels (the runner tags its containers foundry.runner=1). */
+  labels?: Record<string, string>;
 }
 
 export interface PtyHandle {
@@ -110,7 +118,7 @@ export interface SandboxDriver {
   execShell(
     envId: string,
     command: string,
-    opts?: { cwd?: string; env?: Record<string, string>; timeoutMs?: number },
+    opts?: { cwd?: string; env?: Record<string, string>; timeoutMs?: number; signal?: AbortSignal },
   ): Promise<ExecResult>;
   openPty(envId: string, opts?: { cwd?: string; cols?: number; rows?: number }): Promise<PtyHandle>;
   files: FileApi;

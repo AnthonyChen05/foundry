@@ -88,6 +88,13 @@ export interface StartRunOpts {
   /** Per-tool policy map from chat.send {agent: true, toolPolicy}. */
   toolPolicy?: Record<string, unknown>;
   /**
+   * Where tool calls execute (ADR-015): "local" = the desktop executor's
+   * sandbox (chat-scoped env), absent/"cloud" = the backend sandbox env.
+   */
+  location?: "local" | "cloud";
+  /** Explicit env (boot-resume): re-materialize this env and rebind. */
+  envId?: string;
+  /**
    * Boot-resume mode: rebuild loop state from the persisted conversation,
    * finalize if the last assistant step already finished the work, and
    * re-execute only tool calls with no tool_result event (ADR-003).
@@ -146,7 +153,19 @@ export class AgentRunner {
     const chanRun = `run:${opts.runId}`;
 
     try {
-      const env = await sandbox.ensureEnv(opts.userId);
+      // Env resolution (ADR-015): local chats bind a chat-scoped executor env;
+      // plain cloud runs keep the user's primary env; resume re-materializes
+      // the run's own env when its container died.
+      const env = opts.envId !== undefined
+        ? await sandbox.ensureEnvForRun(opts.userId, { envId: opts.envId })
+        : opts.location === "local"
+          ? await sandbox.ensureEnvForRun(opts.userId, { location: "local", chatId: opts.conversationId })
+          : await sandbox.ensureEnv(opts.userId);
+      this.deps.dbx.db.update(runsTable).set({ envId: env.envId }).where(eq(runsTable.id, opts.runId)).run();
+      if (opts.location === "local") {
+        this.deps.chat.setConversationBinding(opts.conversationId, { location: "local", envId: env.envId });
+        this.deps.emit("sys.resync", `chat:${opts.conversationId}`, { reason: "env_binding" });
+      }
       const tools = new Map<string, AgentTool>();
       for (const t of builtinAgentTools()) tools.set(t.def.function.name, t);
       for (const t of this.deps.mcp?.tools() ?? []) tools.set(t.def.function.name, t);
@@ -413,19 +432,26 @@ export class AgentRunner {
     emit("run.status", chanRun, { runId: opts.runId, status: "done" });
 
     // Snapshot (best-effort — a snapshot failure must not fail a done run).
-    try {
-      const ws = sandbox.ensureWorkspace(opts.userId);
-      void snapshotWorkspace({
-        blobs: sandbox.blobStore,
-        workspaceId: ws.id,
-        workspaceDir: ws.dir,
-        envId: env?.envId ?? "",
-        note: `agent run ${opts.runId}`,
-      }).catch((err: unknown) => {
+    // Local (executor) runs SKIP the snapshot: the core-side workspace dir is
+    // empty for them and push-to-cloud is the archival path — snapshotting
+    // here would archive a misleading empty tar forever.
+    if (opts.location !== "local") {
+      try {
+        const ws = sandbox.ensureWorkspace(opts.userId);
+        void snapshotWorkspace({
+          blobs: sandbox.blobStore,
+          workspaceId: ws.id,
+          workspaceDir: ws.dir,
+          envId: env?.envId ?? "",
+          note: `agent run ${opts.runId}`,
+        }).catch((err: unknown) => {
+          this.deps.log?.({ mod: "agent", runId: opts.runId, err }, "snapshot failed");
+        });
+      } catch (err) {
         this.deps.log?.({ mod: "agent", runId: opts.runId, err }, "snapshot failed");
-      });
-    } catch (err) {
-      this.deps.log?.({ mod: "agent", runId: opts.runId, err }, "snapshot failed");
+      }
+    } else {
+      this.deps.log?.({ mod: "agent", runId: opts.runId }, "snapshot skipped — local run (push-to-cloud archives the workspace)");
     }
     return { status: "done", ...(typeof finalMessage.content === "string" ? { summary: finalMessage.content } : {}) };
   }
@@ -488,6 +514,9 @@ export class AgentRunner {
         emit: this.deps.emit,
         signal: new AbortController().signal,
         resume: true,
+        // ADR-015: re-materialize the run's own env (executor probe is part
+        // of ensureEnvForRun; plain cloud envs keep the fast path).
+        ...(row.envId !== null ? { envId: row.envId } : {}),
       });
       if (parked) {
         void p.then(

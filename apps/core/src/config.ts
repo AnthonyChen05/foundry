@@ -58,6 +58,12 @@ export interface AppConfig {
    * web module probes standard repo locations. Undefined → API-only mode.
    */
   readonly webDir: string | undefined;
+  /** Username of the owner account (ADR-006). FOUNDRY_ADMIN_USER, default "admin". */
+  readonly adminUser: string;
+  /** Owner password for the first credential bootstrap (ADR-006). When
+   * FOUNDRY_ADMIN_PASSWORD is unset, boot generates one and writes
+   * admin_credentials.txt under the data dir. Ignored once credentials exist. */
+  readonly adminPassword: string | undefined;
 }
 
 export class ConfigValidationError extends Error {}
@@ -106,6 +112,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     notifyNtfyUrl: env["FOUNDRY_NTFY_URL"]?.trim() || undefined,
     notifyNtfyTopic: env["FOUNDRY_NTFY_TOPIC"]?.trim() || undefined,
     webDir: env["FOUNDRY_WEB_DIR"]?.trim() || undefined,
+    adminUser: env["FOUNDRY_ADMIN_USER"]?.trim() || "admin",
+    adminPassword: env["FOUNDRY_ADMIN_PASSWORD"]?.trim() || undefined,
     sandboxImage: env["FOUNDRY_SANDBOX_IMAGE"]?.trim() || "ghcr.io/open-webui/open-terminal:slim",
     sandboxEgress: env["FOUNDRY_SANDBOX_EGRESS"]?.trim() === "open" ? "open" : "allowlist",
     egressBaseUrl: env["FOUNDRY_EGRESS_BASE_URL"]?.trim() || `http://host.docker.internal:${port}/v1/egress`,

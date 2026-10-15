@@ -100,6 +100,29 @@ interface SandboxDriver {
 - Blob store: content-addressed (sha256) files under `$FOUNDRY_DATA_DIR/blobs/`.
 - Vector: sqlite-vec virtual table for memory embeddings.
 
+### Local execution plane ("dynamic container support", ADR-015)
+
+The desktop app can host a **local sandbox**: its runner process
+(`@foundry/runner`) connects to core over WS as a clientKind `executor`,
+registers via `exec.register`, and answers server→client `exec.*` requests by
+executing them on an Open Terminal container on the LOCAL Docker engine
+(same image + caps + driver code as the backend). Core wraps it as
+`LocalExecutorDriver implements SandboxDriver` — agent tools, term and files
+are location-blind; a local chat binds a **chat-scoped env**
+(`conversations.meta {location, envId}`, runner-side workspace dir
+`<workspaceRoot>/<chatId>`); dead envs re-materialize over the same dir
+(files survive restarts/reaps); orphan containers (label `foundry.runner=1`)
+are swept at runner boot. Local containers never hold an LLM key and skip the
+ipset-based allowlist (they open plain egress on the owner's own machine).
+
+**Push to cloud:** `POST /v1/chats/:chatId/push` re-materializes the local
+env, pulls its workspace tar over the bridge (excluding dependency dirs),
+creates the chat's cloud env in a per-chat workspace, restores the files, and
+runs a **reconcile agent run** (trigger `manual`) in the conversation — the
+LLM inspects the workspace and the chat's shell history (run_events) and
+reinstalls what is missing; on done the binding flips to `"cloud"`
+(`sys.resync` to clients). Failures keep the chat local.
+
 ## 3. Key data flows
 
 **(a) Plain chat (no agent):** client → `chat.send` (WS) or `POST

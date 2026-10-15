@@ -8,6 +8,7 @@ import { envs, workspaces } from "../db/schema.js";
 import { ulid } from "../util/ulid.js";
 import type { BlobStore } from "../storage/blobs.js";
 import { DEFAULT_CAPS, resolveInWorkspace, assertInside, SandboxError, type SandboxDriver, type EnvHandle } from "./types.js";
+import { OpenTerminalDriver } from "./docker.js";
 
 export type { SandboxDriver, EnvHandle };
 
@@ -41,7 +42,20 @@ export class SandboxService {
     private readonly dbx: FoundryDb,
     private readonly blobs: BlobStore,
     private readonly driver: SandboxDriver,
+    /** Executor plane (ADR-015) — present when runtime wiring builds it. */
+    private readonly exec?: {
+      executorDriver: SandboxDriver;
+      registry: { isOnline(userId: string): boolean };
+    },
   ) {}
+
+  /** The delegating driver for local (executor) envs — wired iff executor present. */
+  private execDriver(): SandboxDriver {
+    if (this.exec === undefined) {
+      throw new SandboxError("executor plane is not wired", 500);
+    }
+    return this.exec.executorDriver;
+  }
 
   get driverName(): string {
     return this.driver.name;
@@ -73,7 +87,83 @@ export class SandboxService {
     return { id, dir };
   }
 
+  /**
+   * Get-or-create a PER-CHAT workspace (ADR-015): the push-to-cloud target and
+   * the bookkeeping side of chat-scoped local dirs. Name `main` remains the
+   * user's primary (shared) workspace — chat workspaces keep chats separate.
+   */
+  ensureChatWorkspace(userId: string, chatId: string): { id: string; dir: string } {
+    const name = `chat:${chatId}`;
+    const row =
+      this.dbx.db
+        .select()
+        .from(workspaces)
+        .where(and(eq(workspaces.userId, userId), eq(workspaces.name, name)))
+        .get() ?? undefined;
+    if (row !== undefined) {
+      mkdirSync(row.path, { recursive: true });
+      return { id: row.id, dir: row.path };
+    }
+    const id = `ws_${ulid()}`;
+    const dir = join(resolve(join(this.config.dataDir, "workspaces", "chats")), chatId);
+    mkdirSync(dir, { recursive: true });
+    this.dbx.db.insert(workspaces).values({ id, userId, name, path: dir, createdAt: Date.now() }).run();
+    return { id, dir };
+  }
+
   // -- envs ---------------------------------------------------------------------
+
+  /**
+   * Run-scoped env resolution (ADR-015). Location-aware with
+   * re-materialization: an env whose container died (executor offline / local
+   * container removed / cloud container gone) is recreated OVER THE SAME
+   * workspace — files survive everything except an explicit destroy.
+   *  - envId (resume): probe executor envs (dead → recreate, same chat dir);
+   *    cloud rows keep the no-probe fast path.
+   *  - location "local": per-CHAT env over a `chat:<id>` workspace; the runner
+   *    owns the desktop dir; core never sees those files.
+   *  - location "cloud" + chatId: per-chat cloud env (the push target).
+   */
+  async ensureEnvForRun(
+    userId: string,
+    opts?: { location?: "local" | "cloud"; envId?: string; chatId?: string },
+  ): Promise<EnvHandle> {
+    if (opts?.envId !== undefined) {
+      const row = this.getEnvRow(opts.envId);
+      if (row === undefined || row.status === "dead") throw new UnknownEnvError(opts.envId);
+      if (row.driver !== "executor") return this.liveHandle(row.id);
+      if ((await this.execDriver().status(row.id)) === "ready") return this.liveHandle(row.id);
+      return this.recreateLocal(row, userId);
+    }
+    if (opts?.location === "local") {
+      const chatId = opts.chatId ?? "";
+      if (!this.exec?.registry.isOnline(userId) || chatId === "") {
+        throw new SandboxError(
+          chatId === ""
+            ? "local execution requires a chat-scoped workspace"
+            : "local execution requested but no local executor is connected",
+          503,
+        );
+      }
+      const ws = this.ensureChatWorkspace(userId, chatId);
+      const row = this.readyEnvIn(ws.id);
+      if (row !== undefined) {
+        if ((await this.execDriver().status(row.id)) === "ready") return this.liveHandle(row.id);
+        return this.recreateLocal(row, userId);
+      }
+      return this.createEnvLocal(userId, ws, chatId);
+    }
+    const ws = opts?.chatId !== undefined ? this.ensureChatWorkspace(userId, opts.chatId) : this.ensureWorkspace(userId);
+    const row = this.readyEnvIn(ws.id);
+    if (row !== undefined) {
+      // Probe: a dead cloud container re-creates over the same workspace dir
+      // (workspace content lives on the core's disk, so files survive).
+      if ((await this.driver.status(row.id)) === "ready") return this.liveHandle(row.id);
+      this.dbx.db.update(envs).set({ status: "dead" }).where(eq(envs.id, row.id)).run();
+      if (this.defaultEnvId === row.id) this.defaultEnvId = undefined;
+    }
+    return this.createEnv(userId, ws);
+  }
 
   /**
    * Get-or-create the caller's primary env: one container per workspace
@@ -122,6 +212,7 @@ export class SandboxService {
       workspaceDir: workspace.dir,
       env: envVars,
       caps: DEFAULT_CAPS,
+      userId,
     });
     // Row id == the driver's own envId: one id space between DB rows and
     // driver maps (envFor/liveHandle re-key by the row id on restarts).
@@ -145,6 +236,72 @@ export class SandboxService {
     return handle;
   }
 
+  // -- executor (local) envs (ADR-015) ------------------------------------------
+
+  /** First ready env row in a workspace, if any (single-env invariant). */
+  private readyEnvIn(workspaceId: string) {
+    return (
+      this.dbx.db
+        .select()
+        .from(envs)
+        .where(and(eq(envs.workspaceId, workspaceId), eq(envs.status, "ready")))
+        .get() ?? undefined
+    );
+  }
+
+  /** Create a per-chat LOCAL env over the executor bridge. No egress env:
+   * the local container never calls an LLM (guardrail #2), and the
+   * ipset-based allowlist would refuse OT start on Docker Desktop. */
+  private async createEnvLocal(
+    userId: string,
+    ws: { id: string; dir: string },
+    chatId: string,
+  ): Promise<EnvHandle> {
+    if (!this.exec?.registry.isOnline(userId)) {
+      throw new SandboxError("local execution requested but no local executor is connected", 503);
+    }
+    const envId = `env_${ulid()}`;
+    const handle = await this.execDriver().create({
+      envId,
+      workspaceDir: "", // the runner decides the desktop dir and reports it
+      env: {},
+      caps: DEFAULT_CAPS,
+      chatId,
+      userId,
+    });
+    this.dbx.db
+      .insert(envs)
+      .values({
+        id: envId,
+        driver: "executor",
+        workspaceId: ws.id,
+        image: this.config.sandboxImage,
+        status: "ready",
+        caps: { ...DEFAULT_CAPS },
+        containerRef: handle.containerRef ?? null,
+        egressTokenHash: null,
+        workspaceDir: handle.workspaceDir,
+        createdAt: Date.now(),
+        lastActiveAt: Date.now(),
+      })
+      .run();
+    // Local envs are chat-scoped: they never become the process-wide default.
+    return handle;
+  }
+
+  /** A local env's container died: fresh env over the SAME chat dir —
+   * the runner-side workspace persists, so files are not lost. */
+  private async recreateLocal(row: { id: string; driver: string; workspaceId: string | null }, userId: string): Promise<EnvHandle> {
+    this.dbx.db.update(envs).set({ status: "dead" }).where(eq(envs.id, row.id)).run();
+    const chatName = row.workspaceId !== null
+      ? this.dbx.db.select().from(workspaces).where(eq(workspaces.id, row.workspaceId)).get()?.name
+      : undefined;
+    const chatId = chatName?.startsWith("chat:") ? chatName.slice(5) : "";
+    if (chatId === "") throw new SandboxError("local env has no chat-scoped workspace", 500);
+    const ws = this.ensureChatWorkspace(userId, chatId);
+    return this.createEnvLocal(userId, ws, chatId);
+  }
+
   getEnvRow(envId: string) {
     return this.dbx.db.select().from(envs).where(eq(envs.id, envId)).get() ?? undefined;
   }
@@ -161,10 +318,15 @@ export class SandboxService {
     const wsRow = row.workspaceId !== null
       ? this.dbx.db.select().from(workspaces).where(eq(workspaces.id, row.workspaceId)).get()
       : undefined;
-    const workspaceDir = wsRow?.path ?? join(resolve(join(this.config.dataDir, "workspaces")), DEFAULT_WORKSPACE);
+    const driver = row.driver === "executor" ? this.execDriver() : this.driver;
+    // Executor envs live on the runner's desktop dir (reported at create);
+    // cloud envs back the core-hosted workspace dir.
+    const workspaceDir = row.driver === "executor"
+      ? (row.workspaceDir ?? wsRow?.path ?? join(resolve(join(this.config.dataDir, "workspaces")), DEFAULT_WORKSPACE))
+      : (wsRow?.path ?? join(resolve(join(this.config.dataDir, "workspaces")), DEFAULT_WORKSPACE));
     return {
       envId: row.id,
-      driver: this.driver,
+      driver,
       ...(row.containerRef !== null ? { containerRef: row.containerRef } : {}),
       workspaceDir,
       // env vars (egress token etc.) were injected at create; the DB never
@@ -236,7 +398,15 @@ export class SandboxService {
       .all();
     for (const row of rows) {
       if (row.lastActiveAt !== null && row.lastActiveAt >= cutoff) continue;
-      await this.destroyEnv(row.id);
+      // Route by the row's driver (executor envs destroy via the bridge when
+      // online; the runner-side dir persists for re-materialization).
+      if (row.driver === "executor") {
+        await this.execDriver().destroy(row.id).catch(() => {});
+      } else {
+        await this.destroyEnv(row.id);
+      }
+      this.dbx.db.update(envs).set({ status: "dead" }).where(eq(envs.id, row.id)).run();
+      if (this.defaultEnvId === row.id) this.defaultEnvId = undefined;
     }
   }
 }
@@ -267,4 +437,17 @@ export async function makeDriver(
     const { FakeDriver } = await import("./fake.js");
     return new FakeDriver();
   }
+}
+
+/**
+ * Standalone OpenTerminalDriver for the RUNNER process (ADR-015): the runner
+ * hosts the local sandbox and needs the exact same OT driver core uses — but
+ * without an AppConfig. `daemonReachable()` decides registration details
+ * (dockerAvailable); when the local daemon is down the runner registers as
+ * "no docker" and local sends fast-fail core-side.
+ */
+export async function makeOtDriver(
+  sandboxImage: string,
+): Promise<OpenTerminalDriver> {
+  return new OpenTerminalDriver({ sandboxImage });
 }

@@ -48,7 +48,8 @@ export class FakeDriver implements SandboxDriver {
   private readonly ptys = new Map<string, FakePty>();
 
   async create(opts: CreateEnvOpts): Promise<EnvHandle> {
-    const envId = `env_fake_${this.nextId++}`;
+    // Honor a core-minted envId (executor/runner path); legacy mints otherwise.
+    const envId = opts.envId ?? `env_fake_${this.nextId++}`;
     mkdirSync(opts.workspaceDir, { recursive: true });
     const env: FakeEnv = {
       id: envId,

@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "required": [
+    "envId",
+    "dir"
+  ],
+  "properties": {
+    "envId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "dir": {
+      "type": "string"
+    }
+  },
+  "$id": "ExecFilesListParams",
+  "title": "ExecFilesListParams"
+}

@@ -26,6 +26,7 @@
   "devDependencies": {
     "@eslint/js": "^9.0.0",
     "@foundry/core": "workspace:*",
+    "@foundry/runner": "workspace:*",
     "@foundry/sdk-ts": "workspace:*",
     "@types/node": "^22.0.0",
     "drizzle-kit": "^0.31.0",

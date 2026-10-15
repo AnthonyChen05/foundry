@@ -48,6 +48,10 @@
             {
               "const": "cli",
               "type": "string"
+            },
+            {
+              "const": "executor",
+              "type": "string"
             }
           ]
         },

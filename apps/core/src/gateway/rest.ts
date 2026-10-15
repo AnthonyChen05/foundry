@@ -18,6 +18,7 @@ import type { ToolChoice, ToolDefinition } from "../providers/types.js";
 import { ProviderError } from "../providers/types.js";
 import type { ChatChunk, Usage } from "../providers/types.js";
 import type { McpManager } from "../agent/mcp.js";
+import type { PushService } from "../executor/push.js";
 import { McpServerSchema, type McpServer } from "../agent/mcp.js";
 import type { SchedulerService } from "../agent/schedules.js";
 import type { HookService } from "./hooks.js";
@@ -63,6 +64,8 @@ export interface RestDeps {
   schedules?: SchedulerService;
   /** Webhook triggers (P3 trigger + admin plane; undefined → endpoints report down). */
   hooks?: HookService;
+  /** ADR-015 push-to-cloud (undefined → the route reports down). */
+  push?: PushService;
 }
 
 export function registerRest(app: FastifyInstance, deps: RestDeps): void {
@@ -124,17 +127,67 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
   });
 
   app.post("/v1/auth/login", async (request, reply) => {
-    const body = (request.body ?? {}) as { apiKey?: string };
-    if (typeof body.apiKey !== "string" || body.apiKey.length === 0) {
-      await reply.code(400).send(openAiError(400, "apiKey required", "invalid_request_error"));
+    const body = (request.body ?? {}) as { username?: string; password?: string };
+    if (typeof body.username !== "string" || body.username.length === 0 || typeof body.password !== "string" || body.password.length === 0) {
+      await reply.code(400).send(openAiError(400, "username and password are required", "invalid_request_error"));
       return;
     }
-    const session = deps.auth.issueSession(body.apiKey);
+    // scrypt verification is deliberately slow (~50-100 ms) — awaits inside.
+    const session = await deps.auth.loginWithPassword(body.username, body.password);
     if (!session) {
-      await reply.code(401).send(openAiError(401, "invalid api key", "authentication_error"));
+      await reply.code(401).send(openAiError(401, "invalid username or password", "authentication_error"));
       return;
     }
     return { sessionToken: session.plaintext, expiresAt: new Date(session.expiresAt).toISOString() };
+  });
+
+  // ADR-006: self-service password change for the authenticated user.
+  app.post("/v1/auth/password", async (request, reply) => {
+    const user = (request as AuthedRequest).user;
+    if (!user) return; // unreachable (auth hook), satisfies strict types
+    const body = (request.body ?? {}) as { currentPassword?: string; newPassword?: string };
+    if (typeof body.newPassword !== "string" || body.newPassword.length < 8 || body.newPassword.length > 128) {
+      await reply.code(400).send(openAiError(400, "newPassword must be 8-128 characters", "invalid_request_error"));
+      return;
+    }
+    if (body.currentPassword !== undefined && typeof body.currentPassword !== "string") {
+      await reply.code(400).send(openAiError(400, "currentPassword must be a string", "invalid_request_error"));
+      return;
+    }
+    const ok = await deps.auth.setPassword(user.userId, body.currentPassword, body.newPassword);
+    if (!ok) {
+      await reply.code(401).send(openAiError(401, "current password incorrect", "authentication_error"));
+      return;
+    }
+    return { ok: true };
+  });
+
+  // ADR-015: push a chat's local workspace + deps into a backend (cloud) env.
+  app.post("/v1/chats/:chatId/push", async (request, reply) => {
+    const user = (request as AuthedRequest).user;
+    if (!user) return; // unreachable (auth hook), satisfies strict types
+    if (deps.push === undefined) {
+      await reply.code(501).send(openAiError(501, "push-to-cloud unavailable", "api_error"));
+      return;
+    }
+    const { chatId } = request.params as { chatId: string };
+    try {
+      return await deps.push.pushChatToCloud(user.userId, chatId);
+    } catch (err) {
+      // PushRejected and SandboxError both carry an HTTP-ish status — map any
+      // status-carrying rejection (500 with no status is the generic catch).
+      const status = (err as { status?: unknown }).status;
+      if (typeof status === "number" && status >= 400 && status < 505) {
+        const type = status === 409 || status === 400 || status === 404
+          ? "invalid_request_error"
+          : status === 503 || status === 504
+            ? "capacity"
+            : "api_error";
+        await reply.code(status).send(openAiError(status, err instanceof Error ? err.message : "push failed", type));
+        return;
+      }
+      await reply.code(500).send(openAiError(500, err instanceof Error ? err.message : "push failed", "api_error"));
+    }
   });
 
   // -- openai-compatible -----------------------------------------------------

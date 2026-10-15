@@ -1,0 +1,33 @@
+{
+  "$id": "ExecExecResult",
+  "type": "object",
+  "required": [
+    "exitCode",
+    "stdout",
+    "stderr",
+    "timedOut"
+  ],
+  "properties": {
+    "exitCode": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "stdout": {
+      "type": "string"
+    },
+    "stderr": {
+      "type": "string"
+    },
+    "timedOut": {
+      "type": "boolean"
+    }
+  },
+  "title": "ExecExecResult"
+}

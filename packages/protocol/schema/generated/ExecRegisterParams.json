@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "required": [
+    "name",
+    "version",
+    "dockerAvailable"
+  ],
+  "properties": {
+    "name": {
+      "minLength": 1,
+      "description": "Executor name, e.g. \"desktop\".",
+      "type": "string"
+    },
+    "version": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "dockerAvailable": {
+      "description": "Whether the executor's Docker daemon answered.",
+      "type": "boolean"
+    },
+    "workspaceRoot": {
+      "description": "Runner-side root dir for local workspaces (display only).",
+      "type": "string"
+    }
+  },
+  "$id": "ExecRegisterParams",
+  "title": "ExecRegisterParams"
+}

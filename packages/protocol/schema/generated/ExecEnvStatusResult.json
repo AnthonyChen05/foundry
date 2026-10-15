@@ -1,0 +1,22 @@
+{
+  "$id": "ExecEnvStatusResult",
+  "type": "object",
+  "required": [
+    "status"
+  ],
+  "properties": {
+    "status": {
+      "anyOf": [
+        {
+          "const": "ready",
+          "type": "string"
+        },
+        {
+          "const": "dead",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "title": "ExecEnvStatusResult"
+}

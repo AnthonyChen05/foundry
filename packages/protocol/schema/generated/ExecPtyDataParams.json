@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "required": [
+    "ptyId",
+    "data"
+  ],
+  "properties": {
+    "ptyId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "data": {
+      "type": "string"
+    }
+  },
+  "$id": "ExecPtyDataParams",
+  "title": "ExecPtyDataParams"
+}

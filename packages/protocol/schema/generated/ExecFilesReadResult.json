@@ -1,0 +1,17 @@
+{
+  "$id": "ExecFilesReadResult",
+  "type": "object",
+  "required": [
+    "b64",
+    "isText"
+  ],
+  "properties": {
+    "b64": {
+      "type": "string"
+    },
+    "isText": {
+      "type": "boolean"
+    }
+  },
+  "title": "ExecFilesReadResult"
+}

@@ -78,8 +78,20 @@ export class FoundryClient {
     return this.json("GET", "/readyz");
   }
 
-  login(apiKey: string): Promise<{ sessionToken: string; expiresAt: string }> {
-    return this.json("POST", "/v1/auth/login", { apiKey });
+  /** ADR-006: user-facing login = username + password → session token. */
+  login(username: string, password: string): Promise<{ sessionToken: string; expiresAt: string }> {
+    return this.json("POST", "/v1/auth/login", { username, password });
+  }
+
+  /** ADR-006: self-service password change (session-authenticated). */
+  changePassword(currentPassword: string, newPassword: string): Promise<{ ok: boolean }> {
+    return this.json("POST", "/v1/auth/password", { currentPassword, newPassword });
+  }
+
+  /** ADR-015: push a local chat's workspace + deps into a backend env. The
+   * response returns immediately; progress streams on the chat's run. */
+  pushChat(chatId: string): Promise<{ pushRunId: string; cloudEnvId: string }> {
+    return this.json("POST", `/v1/chats/${encodeURIComponent(chatId)}/push`, {});
   }
 
   models(): Promise<{ object: string; data: Model[] }> {

@@ -1,0 +1,27 @@
+{
+  "$id": "ExecFileStat",
+  "type": "object",
+  "required": [
+    "path",
+    "size",
+    "mtimeMs",
+    "isDir"
+  ],
+  "properties": {
+    "path": {
+      "type": "string"
+    },
+    "size": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "mtimeMs": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "isDir": {
+      "type": "boolean"
+    }
+  },
+  "title": "ExecFileStat"
+}

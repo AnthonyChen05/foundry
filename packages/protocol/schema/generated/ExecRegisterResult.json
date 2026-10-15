@@ -1,0 +1,11 @@
+{
+  "$id": "ExecRegisterResult",
+  "type": "object",
+  "properties": {
+    "replaced": {
+      "description": "True when a previous executor for this user was displaced.",
+      "type": "boolean"
+    }
+  },
+  "title": "ExecRegisterResult"
+}

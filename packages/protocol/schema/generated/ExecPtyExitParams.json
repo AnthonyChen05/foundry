@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "required": [
+    "ptyId",
+    "code"
+  ],
+  "properties": {
+    "ptyId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "code": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$id": "ExecPtyExitParams",
+  "title": "ExecPtyExitParams"
+}

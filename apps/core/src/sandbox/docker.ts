@@ -38,7 +38,7 @@ const OT_READY_TIMEOUT_MS = 120_000;
 export class DockerLauncher {
   readonly docker: Dockerode;
 
-  constructor(private readonly config: AppConfig) {
+  constructor(private readonly config: Pick<AppConfig, "sandboxImage">) {
     this.docker = new Dockerode();
   }
 
@@ -88,6 +88,7 @@ export class DockerLauncher {
       Cmd: ["run"],
       ExposedPorts: { "8000/tcp": {} },
       Env: envEntries,
+      Labels: { "foundry.sandbox": "1", ...(opts.labels ?? {}) },
       HostConfig: {
         PortBindings: { "8000/tcp": [{ HostIp: "127.0.0.1", HostPort: String(hostPort) }] },
         Binds: [`${workspaceDir}:${OT_MOUNT_ROOT}`],
@@ -155,7 +156,7 @@ export class OpenTerminalDriver implements SandboxDriver {
   /** envId → live client + container id (in-memory; DB rows are service-level). */
   private readonly live = new Map<string, { ot: OtClient; containerId: string; workspaceDir: string }>();
 
-  constructor(config: AppConfig) {
+  constructor(config: Pick<AppConfig, "sandboxImage">) {
     this.launcher = new DockerLauncher(config);
   }
 
@@ -168,7 +169,9 @@ export class OpenTerminalDriver implements SandboxDriver {
       ...opts,
       apiKey: OtClient.newApiKey(),
     });
-    const envId = `env_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    // Honor a core-minted envId (executor/runner path): the executor bridge
+    // keys all later calls by the id core minted (== DB row id).
+    const envId = opts.envId ?? `env_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     this.live.set(envId, { ot: launched.ot, containerId: launched.containerRef ?? "", workspaceDir: opts.workspaceDir });
     return { envId, driver: this, containerRef: launched.containerRef, workspaceDir: opts.workspaceDir, env: { ...(opts.env ?? {}) } };
   }
@@ -193,10 +196,16 @@ export class OpenTerminalDriver implements SandboxDriver {
   async execShell(
     envId: string,
     command: string,
-    opts?: { cwd?: string; env?: Record<string, string>; timeoutMs?: number },
+    opts?: { cwd?: string; env?: Record<string, string>; timeoutMs?: number; signal?: AbortSignal },
   ): Promise<ExecResult> {
     const cwd = opts?.cwd !== undefined ? this.containerPath(envId, opts.cwd) : undefined;
-    const status = await this.clientFor(envId).exec(command, { ...(cwd !== undefined ? { cwd } : {}), ...(opts?.env !== undefined ? { env: opts.env } : {}), ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}) });
+    const status = await this.clientFor(envId).exec(command, {
+      ...(cwd !== undefined ? { cwd } : {}),
+      ...(opts?.env !== undefined ? { env: opts.env } : {}),
+      ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      // Executor cancel path (ADR-015): killed via the OT exec API.
+      ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+    });
     return toExecResult(status);
   }
 
@@ -256,7 +265,19 @@ export class OpenTerminalDriver implements SandboxDriver {
     write: async (envId, path, data) => {
       const ot = this.clientFor(envId);
       const res = await ot.writeFile(this.containerPath(envId, path), data);
-      const stat = await this.files.stat(envId, path);
+      // Docker Desktop's shared-fs writes can lag a beat before in-container
+      // execs see them: retry the post-write stat so a fresh write is never
+      // reported missing (a REAL missing path still fails after ~1.2 s).
+      let stat: FileStat;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          stat = await this.files.stat(envId, path);
+          break;
+        } catch (err) {
+          if (attempt >= 4 || !(err instanceof SandboxError) || err.status !== 404) throw err;
+          await new Promise<void>((r) => setTimeout(r, 300));
+        }
+      }
       void res;
       return stat;
     },
@@ -312,7 +333,7 @@ export class DockerDriver implements SandboxDriver {
   private readonly launcher: DockerLauncher;
   private readonly live = new Map<string, { containerId: string; workspaceDir: string }>();
 
-  constructor(config: AppConfig) {
+  constructor(config: Pick<AppConfig, "sandboxImage">) {
     this.launcher = new DockerLauncher(config);
   }
 
@@ -342,7 +363,8 @@ export class DockerDriver implements SandboxDriver {
       },
     });
     await container.start();
-    const envId = `env_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    // Honor a core-minted envId when provided (executor/runner path).
+    const envId = opts.envId ?? `env_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     this.live.set(envId, { containerId: container.id, workspaceDir: opts.workspaceDir });
     return { envId, driver: this, containerRef: container.id, workspaceDir: opts.workspaceDir, env: { ...(opts.env ?? {}) } };
   }

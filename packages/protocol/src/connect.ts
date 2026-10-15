@@ -4,7 +4,7 @@ import { PROTOCOL_VERSION } from "./version.js";
 
 /** §1.2 handshake shapes. First frame on every WS connection MUST be `connect`. */
 
-export const CLIENT_KINDS = ["android", "windows", "web", "cli"] as const;
+export const CLIENT_KINDS = ["android", "windows", "web", "cli", "executor"] as const;
 
 export type ClientKind = (typeof CLIENT_KINDS)[number];
 

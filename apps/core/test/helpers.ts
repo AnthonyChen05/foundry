@@ -13,6 +13,7 @@ import { bootstrapServices, buildRuntime, type FoundryRuntime } from "../src/run
  */
 
 const MASTER_KEY = "test-master-key-not-a-secret";
+const TEST_ADMIN_PASSWORD = "test-admin-password";
 
 export interface TestServer {
   rt: FoundryRuntime;
@@ -49,6 +50,8 @@ export async function startServer(overrides?: Partial<AppConfig>): Promise<TestC
     logLevel: "warn",
     // Unit tests must never touch Docker even when the local daemon runs.
     sandboxDriver: "fake",
+    // Deterministic owner credentials (ADR-006 bootstrap) for every test boot.
+    adminPassword: TEST_ADMIN_PASSWORD,
     ...overrides,
   };
   process.env.FOUNDRY_MASTER_KEY = MASTER_KEY;
@@ -86,4 +89,4 @@ export async function startServer(overrides?: Partial<AppConfig>): Promise<TestC
   return ctx;
 }
 
-export { MASTER_KEY };
+export { MASTER_KEY, TEST_ADMIN_PASSWORD };

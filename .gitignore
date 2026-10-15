@@ -9,8 +9,13 @@ dist/
 apps/web/build/
 apps/web/.svelte-kit/
 
+# apps/desktop (Tauri/Rust build output)
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+
 # foundry state (db, blobs, workspaces, vault test artifacts)
 data/
+apps/core/data-dev/
 *.db
 *.db-wal
 *.db-shm

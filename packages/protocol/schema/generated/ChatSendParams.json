@@ -24,7 +24,20 @@
         "enabled": {
           "type": "boolean"
         },
-        "toolPolicy": {}
+        "toolPolicy": {},
+        "location": {
+          "description": "Where tool calls execute (ADR-015): 'local' = the client's desktop executor, absent/cloud = the backend sandbox.",
+          "anyOf": [
+            {
+              "const": "local",
+              "type": "string"
+            },
+            {
+              "const": "cloud",
+              "type": "string"
+            }
+          ]
+        }
       }
     }
   },

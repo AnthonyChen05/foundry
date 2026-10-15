@@ -43,6 +43,20 @@
       "when": 1791420415111,
       "tag": "0005_p3_hooks_model",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1791940598816,
+      "tag": "0006_users_password_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1791943280287,
+      "tag": "0007_runs_envid_envs_workspacedir",
+      "breakpoints": true
     }
   ]
 }

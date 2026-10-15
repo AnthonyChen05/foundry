@@ -24,6 +24,10 @@ import {
   FilesStatParamsSchema,
   RunApproveParamsSchema,
   requiresIdempotencyKey,
+  ExecRegisterParamsSchema,
+  ExecStatusParamsSchema,
+  ExecPtyDataParamsSchema,
+  ExecPtyExitParamsSchema,
 } from "@foundry/protocol";
 import type {
   AuthLoginParams,
@@ -31,6 +35,8 @@ import type {
   ChatHistoryParams,
   ChatSendParams,
   ConnectParams,
+  ExecPtyDataParams,
+  ExecPtyExitParams,
   Message,
   ProtocolError,
   RunApproveParams,
@@ -49,6 +55,15 @@ import { GateService } from "../agent/gates.js";
 import type { AgentRunner } from "../agent/runtime.js";
 import type { TermService } from "./term.js";
 import type { FilesService } from "./files.js";
+import type { LocalExecutorDriver } from "../executor/local_driver.js";
+import type { ExecutorConn, ExecutorRegistry } from "../executor/registry.js";
+
+/** Executor plane wiring (ADR-015): registry + delegating driver, built by
+ *  buildRuntime and handed over via wireServices (like agents/term/files). */
+export interface ExecutorWiring {
+  registry: ExecutorRegistry;
+  driver: LocalExecutorDriver;
+}
 
 /**
  * WS hub (protocol.md §1): /ws — first frame MUST be `connect` (hard close
@@ -73,6 +88,8 @@ interface HConn {
   userId: string;
   sessionId: string;
   ready: boolean;
+  /** Set by exec.register (ADR-015): this connection is the user's executor. */
+  role?: "executor";
 }
 
 const RING_MAX = 500;
@@ -94,6 +111,8 @@ export class WsHub {
   /** In-flight run aborters, runId → controller (run.cancel). Shared with the
    *  AgentRunner (cancellations registry) so resumed runs are cancellable. */
   readonly inFlight = new Map<string, AbortController>();
+  /** Executor-role connections → the registry's conn wrapper (ADR-015). */
+  private readonly executorConns = new Map<HConn, ExecutorConn>();
 
   constructor(private readonly deps: {
     config: AppConfig;
@@ -110,14 +129,17 @@ export class WsHub {
     files?: FilesService;
     /** Approval gates (P3) — wired after construction (buildRuntime). */
     gates?: GateService;
+    /** Executor plane (ADR-015) — wired after construction (buildRuntime). */
+    executor?: ExecutorWiring;
   }) {}
 
   /** Late wiring: the hub is built before the services that need its maps. */
-  wireServices(services: { agents?: AgentRunner; term?: TermService; files?: FilesService; gates?: GateService }): void {
+  wireServices(services: { agents?: AgentRunner; term?: TermService; files?: FilesService; gates?: GateService; executor?: ExecutorWiring }): void {
     if (services.agents !== undefined) this.deps.agents = services.agents;
     if (services.term !== undefined) this.deps.term = services.term;
     if (services.files !== undefined) this.deps.files = services.files;
     if (services.gates !== undefined) this.deps.gates = services.gates;
+    if (services.executor !== undefined) this.deps.executor = services.executor;
   }
 
   // -- event publishing -------------------------------------------------------
@@ -169,9 +191,34 @@ export class WsHub {
       socket.on("message", (raw: unknown) => {
         this.onMessage(conn, typeof raw === "string" ? raw : Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw));
       });
-      socket.on("close", () => this.conns.delete(conn));
-      socket.on("error", () => this.conns.delete(conn));
+      socket.on("close", () => this.reapConn(conn));
+      socket.on("error", () => this.reapConn(conn));
     });
+  }
+
+  /** Connection teardown + executor-registry cleanup (ADR-015). */
+  private reapConn(conn: HConn): void {
+    this.conns.delete(conn);
+    if (conn.role === "executor") {
+      const wrapper = this.executorConns.get(conn);
+      if (wrapper !== undefined) {
+        this.deps.executor?.registry.drop(wrapper, "closed");
+        this.executorConns.delete(conn);
+      }
+    }
+  }
+
+  /** The registry-facing view of a hub connection (stable per conn). */
+  private executorConnOf(conn: HConn): ExecutorConn {
+    let wrapper = this.executorConns.get(conn);
+    if (wrapper === undefined) {
+      wrapper = {
+        userId: conn.userId,
+        send: (frame) => this.send(conn.socket, frame),
+      };
+      this.executorConns.set(conn, wrapper);
+    }
+    return wrapper;
   }
 
   private onMessage(conn: HConn, raw: string): void {
@@ -296,6 +343,25 @@ export class WsHub {
   // -- dispatch ---------------------------------------------------------------
 
   private async dispatch(conn: HConn, frame: unknown): Promise<void> {
+    // Executor plane (ADR-015): a connection registered as the user's executor
+    // answers res frames to the server→client reqs we sent it. Everyone else
+    // keeps today's non-req behavior below.
+    if (
+      conn.role === "executor" && typeof frame === "object" && frame !== null &&
+      (frame as Record<string, unknown>)["type"] === "res"
+    ) {
+      const res = frame as { id?: unknown; ok?: unknown; payload?: unknown; error?: unknown };
+      this.deps.executor?.registry.onRes(
+        conn.userId,
+        {
+          id: typeof res.id === "string" ? res.id : "",
+          ok: res.ok === true,
+          ...(res.payload !== undefined ? { payload: res.payload } : {}),
+          ...(res.error !== undefined ? { error: res.error as { message?: string } } : {}),
+        },
+      );
+      return;
+    }
     if (
       typeof frame !== "object" || frame === null ||
       (frame as Record<string, unknown>)["type"] !== "req"
@@ -379,8 +445,8 @@ export class WsHub {
       case "auth.login": {
         if (!Value.Check(AuthLoginParamsSchema, params)) throw errOf("bad_request", "invalid auth.login params");
         const p = params as AuthLoginParams;
-        const session = this.deps.auth.issueSession(p.apiKey);
-        if (!session) throw errOf("unauthorized", "invalid api key");
+        const session = await this.deps.auth.loginWithPassword(p.username, p.password);
+        if (!session) throw errOf("unauthorized", "invalid username or password");
         return { sessionToken: session.plaintext, expiresAt: new Date(session.expiresAt).toISOString() };
       }
       case "chat.list": {
@@ -506,6 +572,42 @@ export class WsHub {
         const t = params as { envId?: string; path: string };
         return this.deps.files.stat(conn.userId, t.envId, t.path);
       }
+      case "exec.register": {
+        if (!Value.Check(ExecRegisterParamsSchema, params)) throw errOf("bad_request", "invalid exec.register params");
+        if (this.deps.executor === undefined) throw errOf("internal", "executor plane not wired");
+        const p = params as { name: string; version: string; dockerAvailable: boolean; workspaceRoot?: string };
+        const res = this.deps.executor.registry.register(this.executorConnOf(conn), {
+          online: true,
+          name: p.name,
+          version: p.version,
+          dockerAvailable: p.dockerAvailable,
+          ...(p.workspaceRoot !== undefined ? { workspaceRoot: p.workspaceRoot } : {}),
+        });
+        conn.role = "executor";
+        return { ...(res.replaced ? { replaced: true } : {}) };
+      }
+      case "exec.status": {
+        if (!Value.Check(ExecStatusParamsSchema, params)) throw errOf("bad_request", "invalid exec.status params");
+        if (this.deps.executor === undefined) return { online: false };
+        const info = this.deps.executor.registry.info(conn.userId);
+        return info ?? { online: false };
+      }
+      // Executor PTY pump (client → server): transport frames, NOT idempotent.
+      // Byte order is a contract — the handlers below are synchronous map
+      // lookups + callback fan-out with no awaits before them.
+      case "exec.pty.data": {
+        if (!Value.Check(ExecPtyDataParamsSchema, params)) throw errOf("bad_request", "invalid exec.pty.data params");
+        if (this.deps.executor === undefined) throw errOf("internal", "executor plane not wired");
+        const ok = this.deps.executor.driver.handlePtyData(params as ExecPtyDataParams);
+        if (!ok) throw errOf("not_found", `unknown pty: ${(params as ExecPtyDataParams).ptyId}`);
+        return {};
+      }
+      case "exec.pty.exit": {
+        if (!Value.Check(ExecPtyExitParamsSchema, params)) throw errOf("bad_request", "invalid exec.pty.exit params");
+        if (this.deps.executor === undefined) throw errOf("internal", "executor plane not wired");
+        this.deps.executor.driver.handlePtyExit(params as ExecPtyExitParams);
+        return {};
+      }
       default:
         throw errOf("bad_request", `unknown method: ${method}`);
     }
@@ -527,6 +629,27 @@ export class WsHub {
     const agentRun = p.agent?.enabled === true;
     if (agentRun && this.deps.agents === undefined) {
       throw errOf("bad_request", "agent runtime unavailable");
+    }
+
+    // ADR-015: local execution requires a connected executor with Docker.
+    // Fast-fail here (in the send res) instead of failing slowly mid-run.
+    const location = p.agent?.location;
+    if (agentRun && location === "local") {
+      const executor = this.deps.executor;
+      const info = executor?.registry.info(conn.userId);
+      if (!executor?.registry.isOnline(conn.userId) || info === undefined) {
+        throw errOf("bad_request", "local execution requested but no local executor is connected — start the desktop app");
+      }
+      if (info.dockerAvailable !== true) {
+        throw errOf("bad_request", "the local executor has no Docker daemon — start Docker Desktop on that machine");
+      }
+      this.deps.chat.setConversationBinding(p.chatId, { location: "local" });
+    } else if (agentRun) {
+      // Plain cloud run: a chat previously local-flipped is re-bound back to
+      // the shared primary env (meta drops envId on "cloud").
+      if (this.deps.chat.getConversationBinding(p.chatId)?.location === "local") {
+        this.deps.chat.setConversationBinding(p.chatId, { location: "cloud" });
+      }
     }
 
     const controller = new AbortController();
@@ -563,6 +686,7 @@ export class WsHub {
           emit,
           signal: controller.signal,
           ...(toolPolicy !== undefined ? { toolPolicy } : {}),
+          ...(location === "local" ? { location: "local" } : {}),
         })
         .then(finish, finish);
       return { runId, conversationId: p.chatId };

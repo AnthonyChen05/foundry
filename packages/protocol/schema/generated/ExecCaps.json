@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "required": [
+    "cpus",
+    "memMib",
+    "pids"
+  ],
+  "properties": {
+    "cpus": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "memMib": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "pids": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "$id": "ExecCaps",
+  "title": "ExecCaps"
+}

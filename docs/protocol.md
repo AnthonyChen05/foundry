@@ -81,7 +81,33 @@ First frame MUST be `connect`; anything else → hard close.
 | `admin.keys.*` | create/list/revoke API keys | admin only |
 | `admin.providers.*` | upsert/list providers + vault keys | keys accepted here ONLY |
 | — (`admin.schedules.*` moved to REST, §2.1) | | schedules/hooks are admin-REST only |
-| `auth.login` | `{ apiKey }` → `{ sessionToken, expiresAt }` | REST-issued too |
+| `auth.login` | `{ username, password }` → `{ sessionToken, expiresAt }` | human login (ADR-014) |
+| `exec.register` | `{ name, version, dockerAvailable, workspaceRoot? }` → `{ replaced? }` | executor plane (§1.3a); no idem |
+| `exec.status` | `{}` → `ExecutorInfo { online, name?, version?, dockerAvailable?, workspaceRoot?, reason? }` | executor presence probe |
+| `exec.pty.data` | `{ ptyId, data(b64) }` → `{}` | executor PTY pump → `term.data`; no idem |
+| `exec.pty.exit` | `{ ptyId, code }` → `{}` | executor PTY exit → `term.exit` |
+
+### §1.3a Executor plane (server→client requests, ADR-015)
+
+After `connect`, a client calls `exec.register` to become the user's local
+executor (desktop runner; latest wins — a previous executor's pending calls
+reject and its live PTYs `term.exit`). On such connections the **server sends
+`req` frames** and the executor answers a standard `res` frame with the same
+id; every other connection still gets `frame must be { type:'req', … }` for
+non-req frames. These calls carry no idempotency keys: fresh request ids per
+attempt, caller-side timeouts (504 SandboxError shape), no auto-retry (a re-run
+could double-execute; read-only calls may retry with fresh ids).
+
+| Server→client call | Params → Result | Notes |
+|---|---|---|
+| `exec.env.create` | `{ envId, chatId?, caps, image? }` → `{ containerRef?, workspaceDir }` | envId/row id are core-minted; runner hosts the dir |
+| `exec.env.destroy` / `exec.env.status` | `{ envId }` → `{}` / `{ status: "ready"\|"dead" }` | status never throws offline; the driver reports "dead" |
+| `exec.exec` | `{ envId, command, cwd?, env?, timeoutMs? }` → `{ exitCode, stdout, stderr, timedOut }` | mirrors execShell |
+| `exec.exec.cancel` | `{ ref: <reqId> }` → `{}` | run.cancel aborts an in-flight exec (runner kills OT exec) |
+| `exec.openPty` | `{ envId, cwd?, cols?, rows? }` → `{ ptyId }` | PTY data flows back via `exec.pty.data` |
+| `exec.pty.write` / `resize` / `close` | `{ ptyId, … }` → `{}` | |
+| `exec.files.list` / `read` / `write` / `mkdir` / `rm` / `stat` | like §1.3 files.* — read returns `{ b64, isText }`; write chunks >768 KB via `append: true` | binary-safe always |
+| `exec.tar.start` / `chunk` / `free` | `{ envId, excludes? }` → `{ tarId, size, chunkSize }` / `{ index }` → `{ index, b64 }` / `{ tarId } → {}` | workspace pull for push-to-cloud; symlink-free POSIX tar |
 
 Side-effecting methods (chat.send, run.cancel, run.approve, term.open/input/
 resize/close, files.write, files.mkdir, files.rm) carry `idem` **on the frame
@@ -105,6 +131,7 @@ uniform location.
 | `term.exit` | `term:{id}` | `{ code }` (code null when closed via `term.close`) |
 | `notify.push` | `notify` | `{ title, body, runId? }` |
 | `sys.resync` | any | client must refetch channel state |
+| `executor.status` | `sys` | `ExecutorInfo { online, name?, version?, dockerAvailable?, workspaceRoot?, reason? }` — desktop executor came/ went (ADR-015) |
 
 ### 1.5 Approval gates (P3)
 
@@ -194,8 +221,14 @@ copy, the DB stores hashes). OpenAI error envelope `{ error: { code, message } }
 - `POST /v1/admin/keys` `{ name? }` → `{ id, name, key }` (plaintext exactly
   once); `GET /v1/admin/keys` → `{ keys: [{ id, name }] }`;
   `DELETE /v1/admin/keys/:id` → revoked keys stop verifying immediately.
-- `POST /v1/auth/login` `{ apiKey }` → `{ sessionToken, expiresAt }` — a
-  short-lived session token for WS/REST (same shape as the WS `auth.login`).
+- `POST /v1/auth/login` `{ username, password }` → `{ sessionToken, expiresAt }`
+  — a 30-day session token for WS/REST (same shape as the WS `auth.login`).
+  The OpenAI-compat `Bearer <api key>` plane is separate (above) and is not a
+  login method.
+- `POST /v1/auth/password` `{ currentPassword, newPassword(8–128) }` → `{ ok: true }`
+  — self-service change for the authenticated user (401 on wrong current
+  password; not required when the user has no password yet, i.e. a
+  pre-ADR-006 row the boot could not backfill).
 - `GET /v1/admin/mcp/servers` → `{ status: [{ name, connected, tools, error? }] }`;
   `PUT /v1/admin/mcp/servers` with a full MCP server list (settings-driven,
   ADR-006) reloads the MCP manager — tools join the agent registry
@@ -307,3 +340,19 @@ FileEntry = { path, size, mtime, isDir }
   still answer with the OpenAI error envelope; (c) `files.mkdir`/`files.rm`
   accept their full param shapes (`recursive`) — earlier SDK helpers narrowed
   them; (d) no wire changes — P4 is additive consumers only.
+
+- v0 (2026-10-13, local-execution plane, additive): desktop executor bridge +
+  chat env binding (ADR-015). (a) `CLIENT_KINDS` gains `"executor"` (the
+  desktop runner); (b) new client→server methods `exec.register` /
+  `exec.status` / `exec.pty.data` / `exec.pty.exit` — none of them idem-
+  required; (c) §1.3a server→client executor plane exists: connections
+  registered as executors may receive `req` frames and answer `res` with the
+  same id (every other connection still rejects non-req inbound frames);
+  (d) new event `executor.status` on `sys`; (e) `chat.send {agent}` gains
+  `location?: "local" | "cloud"` and `chat.list`/`ChatSummary` gains additive
+  `location?` / `envId?` — a chat binds where its tool calls execute and runs
+  persist `runs.envId`; (f) `POST /v1/chats/:chatId/push` (L3) migrates a
+  local chat to a backend env: workspace tar pulled over the bridge, restored
+  into a per-chat cloud workspace, then an agent run (trigger "push")
+  reconstructs the environment from the chat's install history; the binding
+  flips to cloud on completion (`sys.resync` on `chat:{id}`).

@@ -28,6 +28,15 @@ export const METHOD_NAMES = [
   "admin.providers",
   "admin.schedules",
   "auth.login",
+  // Executor plane (ADR-015) — client→server method names only; the runner's
+  // PTY data/exit feed is intentionally NOT idem-required (streaming, no
+  // retransmit), and register is replace-on-latest. Server→client executor
+  // calls (exec.env.*, exec.exec, exec.files.*, exec.tar.*, exec.pty.write…) go
+  // out as `req` frames on executor connections and are NOT in this list.
+  "exec.register",
+  "exec.status",
+  "exec.pty.data",
+  "exec.pty.exit",
 ] as const;
 
 export type MethodName = (typeof METHOD_NAMES)[number];

@@ -3,7 +3,7 @@
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import "@xterm/xterm/css/xterm.css";
-  import { idem, socket } from "$lib/foundry.svelte";
+  import { activeChatBinding, idem, socket } from "$lib/foundry.svelte";
 
   let host = $state<HTMLDivElement | undefined>(undefined);
   let termId = $state("");
@@ -74,7 +74,13 @@
       t.loadAddon(fit);
       host.replaceChildren();
       t.open(host);
-      const res = await socket().termOpen({}, idem("term"));
+      // ADR-015: open the ACTIVE CHAT's env when it is bound (local chats hit
+      // the desktop sandbox); default = the user's primary backend env.
+      const bind = activeChatBinding();
+      const res = await socket().termOpen(
+        bind.envId !== undefined ? { envId: bind.envId } : {},
+        idem("term"),
+      );
       termId = res.termId;
       if (res.replay.length > 0) t.write(res.replay);
       fit.fit();

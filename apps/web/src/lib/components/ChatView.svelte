@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ToolCall } from "@foundry/sdk-ts";
   import {
+    activeChatBinding,
     app,
     chatById,
     createChat,
@@ -24,6 +25,8 @@
   let menuOpen = $state(false);
   let agent = $state(false);
   let showTools = $state(false);
+  /** Where tool calls run (ADR-015): default = the chat's current binding. */
+  let location = $state<"local" | "cloud">("cloud");
   let policyRows = $state<ToolPolicyRow[]>([]);
   let text = $state("");
   let busy = $state(false);
@@ -72,6 +75,13 @@
     });
   });
 
+  // Follow the active chat's binding: a "local" chat preselects local; a chat
+  // pushed to the cloud flips back to cloud.
+  $effect(() => {
+    const bind = activeChatBinding();
+    if (bind.location !== undefined) location = bind.location;
+  });
+
   async function submit(): Promise<void> {
     const chatId = app.activeChatId;
     const content = text.trim();
@@ -80,7 +90,7 @@
     busy = true;
     sendError = "";
     try {
-      await send(chatId, content, agent, policyRows, modelChoice === "" ? undefined : modelChoice);
+      await send(chatId, content, agent, policyRows, modelChoice === "" ? undefined : modelChoice, location);
       text = "";
       if (ta !== undefined) ta.style.height = "";
     } catch (err) {
@@ -477,6 +487,17 @@
             <button class="chip" class:on={showTools} onclick={() => (showTools = !showTools)}>
               Tools{policyRows.length > 0 ? ` · ${policyRows.length}` : ""}
             </button>
+            {#if app.executor?.online !== true}
+              <span class="chip" style="color: var(--fg-faint)" title="The desktop's local sandbox runner is offline — Local location is unavailable">
+                Local sandbox: offline
+              </span>
+            {/if}
+            <select class="chip chip-select" bind:value={location} aria-label="Execution location">
+              <option value="cloud">Cloud (backend sandbox)</option>
+              <option value="local" disabled={app.executor?.online !== true || app.executor?.dockerAvailable === false}>
+                Local {app.executor?.dockerAvailable === false ? "(no Docker)" : app.executor?.online === true ? "" : "(offline)"}
+              </option>
+            </select>
           {/if}
           {#if sendError !== ""}
             <span class="error-text serror">{sendError}</span>
@@ -637,6 +658,21 @@
     color: var(--warn);
     border-color: color-mix(in srgb, var(--warn) 55%, transparent);
     background: color-mix(in srgb, var(--warn) 10%, transparent);
+  }
+
+  /* execution-location select styled as a chip (ADR-015) */
+  .chip-select {
+    background: var(--bg);
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+  .chip-select:focus {
+    outline: 2px solid var(--accent);
+    border-color: transparent;
+  }
+  .chip-select:disabled {
+    color: var(--fg-faint);
+    cursor: not-allowed;
   }
 
   /* transcript */

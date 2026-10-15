@@ -92,9 +92,11 @@ export class OtClient {
 
   /**
    * Run a shell command until completion or timeout. stdout+stderr merged
-   * (OT limitation — documented in the ExecResult contract).
+   * (OT limitation — documented in the ExecResult contract). An incoming
+   * `signal` (executor cancel path, ADR-015) races the timeout and kills the
+   * process when it fires.
    */
-  async exec(command: string, opts?: { cwd?: string; env?: Record<string, string>; timeoutMs?: number }): Promise<OtExecStatus> {
+  async exec(command: string, opts?: { cwd?: string; env?: Record<string, string>; timeoutMs?: number; signal?: AbortSignal }): Promise<OtExecStatus> {
     const timeoutMs = opts?.timeoutMs ?? 30_000;
     const started = Date.now();
     const waitS = Math.min(Math.max(timeoutMs / 1000, 0), 300);
@@ -104,16 +106,40 @@ export class OtClient {
       `/execute?wait=${waitS.toFixed(0)}`,
       { command, ...(cwd !== undefined ? { cwd } : {}), ...(opts?.env !== undefined ? { env: opts.env } : {}) },
     );
+    // ADR-015 cancel: an external abort kills the OT process and surfaces a
+    // 137/truncated result — same shape the timeout path produces.
+    const external = opts?.signal;
+    let aborted = false;
+    const onAbort = (): void => {
+      aborted = true;
+      void this.kill(first.id).catch(() => {});
+    };
+    if (external !== undefined) {
+      if (external.aborted) {
+        onAbort();
+        return {
+          id: first.id,
+          command: first.command,
+          status: "done",
+          exit_code: 137,
+          truncated: true,
+          next_offset: first.next_offset,
+          output: [],
+        };
+      }
+      external.addEventListener("abort", onAbort, { once: true });
+    }
     let cur = first;
-    while (cur.status === "running" && Date.now() - started < timeoutMs) {
+    while (cur.status === "running" && Date.now() - started < timeoutMs && !aborted) {
       const remainS = Math.min(Math.max((timeoutMs - (Date.now() - started)) / 1000, 0), 300);
       await new Promise<void>((r) => setTimeout(r, 200));
+      if (aborted) break;
       cur = await this.http<OtExecStatus>(
         "GET",
         `/execute/${encodeURIComponent(cur.id)}/status?wait=${remainS.toFixed(0)}&offset=${cur.next_offset}`,
       );
     }
-    if (cur.status === "running") {
+    if (cur.status === "running" || aborted) {
       await this.kill(cur.id);
       // drain whatever landed before the kill
       const after = await this.http<OtExecStatus>("GET", `/execute/${encodeURIComponent(cur.id)}/status?wait=1&offset=${cur.next_offset}`).catch(() => cur);

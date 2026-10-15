@@ -14,6 +14,7 @@ import {
   SysResyncPayloadSchema,
   TermDataPayloadSchema,
   TermExitPayloadSchema,
+  ExecutorStatusPayloadSchema,
 } from "./events.js";
 
 /** Event name → payload schema. Order-stable; drives JSON Schema emission. */
@@ -31,6 +32,7 @@ export const EVENT_PAYLOAD_SCHEMA: Record<EventName, TSchema> = {
   "term.exit": TermExitPayloadSchema,
   "notify.push": NotifyPushPayloadSchema,
   "sys.resync": SysResyncPayloadSchema,
+  "executor.status": ExecutorStatusPayloadSchema,
 };
 
 /** Payload type for a given event name. */

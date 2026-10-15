@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "required": [
+    "ref"
+  ],
+  "properties": {
+    "ref": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "$id": "ExecRefParams",
+  "title": "ExecRefParams"
+}

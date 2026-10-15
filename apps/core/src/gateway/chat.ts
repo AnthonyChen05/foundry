@@ -1,6 +1,7 @@
 import type { Message } from "@foundry/protocol";
 import type { RunBudgets } from "@foundry/protocol";
-import { eq } from "drizzle-orm";
+import type { RunStatusValue } from "@foundry/protocol";
+import { eq, inArray, and } from "drizzle-orm";
 import type { FoundryDb } from "../db/open.js";
 import { conversations, messages, models, runEvents, runs, usage } from "../db/schema.js";
 import { adapterFor } from "../providers/registry.js";
@@ -499,6 +500,41 @@ export class ChatService {
     return { id, title: finalTitle, model, createdAt: toIso(now), updatedAt: toIso(now) };
   }
 
+  /**
+   * Where execution is bound for this chat (ADR-015): `{location, envId?}` in
+   * conversations.meta. Set by chat.send when the composer picks a location
+   * and maintained by the agent runtime (binding to the resolved env).
+   */
+  setConversationBinding(conversationId: string, binding: { location: "local" | "cloud"; envId?: string }): void {
+    const row = this.dbx.db.select().from(conversations).where(eq(conversations.id, conversationId)).get();
+    if (row === undefined) throw new Error(`unknown conversation: ${conversationId}`);
+    const meta = { ...(row.meta ?? {}) };
+    meta["location"] = binding.location;
+    if (binding.envId === undefined) delete meta["envId"];
+    else meta["envId"] = binding.envId;
+    this.dbx.db.update(conversations).set({ meta }).where(eq(conversations.id, conversationId)).run();
+  }
+
+  getConversationBinding(conversationId: string): { location: "local" | "cloud"; envId?: string } | undefined {
+    const row = this.dbx.db.select().from(conversations).where(eq(conversations.id, conversationId)).get();
+    if (row === undefined) return undefined;
+    const meta = row.meta ?? {};
+    const location = meta["location"];
+    if (location !== "local" && location !== "cloud") return undefined;
+    const envId = typeof meta["envId"] === "string" ? meta["envId"] : undefined;
+    return { location, ...(envId !== undefined ? { envId } : {}) };
+  }
+
+  /** True while a run of this conversation is not in a terminal status. */
+  hasActiveRun(conversationId: string): boolean {
+    const rows = this.dbx.db
+      .select({ status: runs.status })
+      .from(runs)
+      .where(and(eq(runs.conversationId, conversationId), inArray(runs.status, ["running", "waiting_approval"] as RunStatusValue[])))
+      .all();
+    return rows.length > 0;
+  }
+
   listConversations(userId: string) {
     return this.dbx.db
       .select()
@@ -506,7 +542,20 @@ export class ChatService {
       .where(eq(conversations.userId, userId))
       .all()
       .sort((a, b) => b.updatedAt - a.updatedAt)
-      .map((c) => ({ id: c.id, title: c.title, model: c.model ?? undefined, createdAt: toIso(c.createdAt), updatedAt: toIso(c.updatedAt) }));
+      .map((c) => {
+        const meta = c.meta ?? {};
+        const location = meta["location"];
+        const envId = typeof meta["envId"] === "string" ? meta["envId"] : undefined;
+        return {
+          id: c.id,
+          title: c.title,
+          model: c.model ?? undefined,
+          ...(location === "local" || location === "cloud" ? { location } : {}),
+          ...(envId !== undefined ? { envId } : {}),
+          createdAt: toIso(c.createdAt),
+          updatedAt: toIso(c.updatedAt),
+        };
+      });
   }
 }
 

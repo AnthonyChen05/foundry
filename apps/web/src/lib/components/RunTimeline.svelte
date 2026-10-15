@@ -4,6 +4,7 @@
     cancelRun,
     chatById,
     gatesFor,
+    pushChatToCloud,
     resolveGate,
     runsOfChat,
     timelineFor,
@@ -11,6 +12,10 @@
   } from "$lib/foundry.svelte";
 
   let scopes = $state<Record<string, GateScope>>({});
+
+  async function onPush(chatId: string): Promise<void> {
+    await pushChatToCloud(chatId);
+  }
 
   /** Runs of the active chat, plus orphan runs (schedules/webhooks). */
   const runs = $derived([
@@ -80,6 +85,11 @@
           <span class="badge {run.status}">{run.status}</span>
           <span class="crumb muted">{run.model || run.trigger}</span>
           <div class="spacer"></div>
+          {#if chatById(run.conversationId ?? "")?.location === "local"}
+            <button class="pushbtn" onclick={() => void onPush(run.conversationId ?? "")} title="Move this chat's workspace + dependencies to the backend sandbox (ADR-015)">
+              Push to cloud
+            </button>
+          {/if}
           {#if isActive(run)}
             <button class="icon-btn" title="Cancel run" aria-label="Cancel run" onclick={() => void onCancel(run.id)}>
               <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -164,6 +174,19 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .pushbtn {
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: 999px;
+    font-size: 12px;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+  .pushbtn:hover {
+    border-color: var(--accent);
   }
 
   .seclabel {

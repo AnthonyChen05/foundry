@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "required": [
+    "envId",
+    "command"
+  ],
+  "properties": {
+    "envId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "command": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "env": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {
+          "type": "string"
+        }
+      }
+    },
+    "timeoutMs": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "$id": "ExecExecParams",
+  "title": "ExecExecParams"
+}

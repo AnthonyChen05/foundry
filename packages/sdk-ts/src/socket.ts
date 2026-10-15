@@ -27,6 +27,9 @@ import {
   type TermOpenParams,
   type TermOpenResult,
   type TermResizeParams,
+  type ExecRegisterParams,
+  type ExecRegisterResult,
+  type ExecutorInfo,
 } from "@foundry/protocol";
 import { FoundryError } from "./errors.js";
 
@@ -44,6 +47,13 @@ interface EventFrame {
   channel: string;
   seq: number;
   payload: unknown;
+}
+
+/** Normalized server→client `req` frame (executor plane, ADR-015). */
+export interface ServerRequest {
+  id: string;
+  method: string;
+  params: unknown;
 }
 
 export interface SocketOptions {
@@ -82,6 +92,13 @@ export class FoundrySocket {
   onResync: ((channel: string) => void) | undefined;
   /** Called on every socket state transition (auto-reconnect UI state). */
   onStatus: ((status: SocketStatus, error?: FoundryError) => void) | undefined;
+  /**
+   * Server→client requests (executor plane, ADR-015): when the server sends
+   * `req` frames to THIS connection, the handler runs and its return value is
+   * replied as a `res` with the same id. Absent handler → an internal error
+   * reply (the server's registry maps that to a caller-side rejection).
+   */
+  onServerRequest: ((req: ServerRequest) => Promise<unknown>) | undefined;
   private readonly token: string;
   private readonly url: string;
   private readonly clientKind: string;
@@ -201,6 +218,27 @@ export class FoundrySocket {
     }
     if (typeof frame !== "object" || frame === null) return;
     const f = frame as Record<string, unknown>;
+    if (f["type"] === "req" && typeof f["id"] === "string" && typeof f["method"] === "string") {
+      // Server→client request (executor plane). Sync reply path: the handler
+      // runs as a detached task and its res is sent when it settles.
+      const req: ServerRequest = { id: f["id"], method: f["method"], params: f["params"] };
+      const handler = this.onServerRequest;
+      if (handler === undefined) {
+        this.sendReply(req.id, false, undefined, { code: "internal", message: "no server-request handler installed" });
+        return;
+      }
+      void handler(req).then(
+        (payload) => this.sendReply(req.id, true, payload, undefined),
+        (err: unknown) =>
+          this.sendReply(
+            req.id,
+            false,
+            undefined,
+            { code: "internal", message: err instanceof Error ? err.message : String(err) },
+          ),
+      );
+      return;
+    }
     if (f["type"] === "event" && typeof f["event"] === "string" && typeof f["channel"] === "string" && typeof f["seq"] === "number") {
       this.cursors.set(f["channel"], f["seq"]);
       const frame: EventFrame = {
@@ -238,6 +276,20 @@ export class FoundrySocket {
           e?.retryable === true,
         ));
       }
+    }
+  }
+
+  private sendReply(id: string, ok: boolean, payload: unknown, error: { code: string; message: string } | undefined): void {
+    this.sendFrame({ type: "res", id, ok, ...(ok ? { payload } : { error }) });
+  }
+
+  private sendFrame(frame: unknown): void {
+    const ws = this.ws;
+    if (ws === undefined || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify(frame));
+    } catch {
+      // closing mid-write
     }
   }
 
@@ -369,6 +421,19 @@ export class FoundrySocket {
 
   runApprove(params: RunApproveParams, idem: string): Promise<Gate> {
     return this.req("run.approve", params, idem) as Promise<Gate>;
+  }
+
+  // -- executor plane (ADR-015): the desktop runner registers + answers reqs ---- /
+
+  /** Become the user's executor (latest wins; a displaced executor's server
+   * calls have already been rejected). */
+  execRegister(params: ExecRegisterParams): Promise<ExecRegisterResult> {
+    return this.req("exec.register", params) as Promise<ExecRegisterResult>;
+  }
+
+  /** Executor presence for this user (UI status dot). */
+  execStatus(): Promise<ExecutorInfo> {
+    return this.req("exec.status", {}) as Promise<ExecutorInfo>;
   }
 
   termOpen(params: TermOpenParams, idem: string): Promise<TermOpenResult> {

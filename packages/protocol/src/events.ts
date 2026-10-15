@@ -1,4 +1,5 @@
 import { type Static, Type } from "@sinclair/typebox";
+import { ExecutorInfoSchema } from "./executor.js";
 import { GateSchema, GateStateSchema, MessageSchema, RunStatusSchema } from "./shapes.js";
 
 /**
@@ -21,6 +22,7 @@ export const EVENT_NAMES = [
   "term.exit",
   "notify.push",
   "sys.resync",
+  "executor.status",
 ] as const;
 
 export type EventName = (typeof EVENT_NAMES)[number];
@@ -162,3 +164,6 @@ export const SysResyncPayloadSchema = Type.Object(
 );
 
 export type SysResyncPayload = Static<typeof SysResyncPayloadSchema>;
+
+/** On `sys`: local-executor presence (ADR-015) — ExecutorInfo shape. */
+export { ExecutorInfoSchema as ExecutorStatusPayloadSchema };

@@ -6,7 +6,11 @@ managed by drizzle-kit. Every domain table carries `user_id` (single row in
 store canonical OpenAI shapes or tagged unions.
 
 ```sql
-users        (id PK, name, created_at)
+users        (id PK, name, username?, password_hash?, created_at)
+             -- username: user-facing login (ADR-014, unique index; NULL on
+             -- pre-password rows, backfilled at boot). password: scrypt
+             -- "scrypt:N:r:p:salt:hash" (hashToken-style sha256 verifier for
+             -- keys/sessions below; passwords get a slow KDF, not a token hash)
 
 api_keys     (id PK, user_id, name, key_hash, created_at, last_used_at, revoked_at)
 
@@ -14,6 +18,8 @@ sessions     (id PK, user_id, token_hash, created_at, expires_at?, revoked_at?)
              -- WS session tokens issued by auth.login; token stored hashed
 
 conversations(id PK, user_id, title, model, created_at, updated_at, meta JSON)
+             -- meta {location: "local"|"cloud", envId?}: the chat's execution
+             -- binding (ADR-015); exposed additively on ChatSummary
 messages     (id PK, conversation_id FK, run_id?, seq INT, role, content JSON,
               created_at)                       -- content = canonical OpenAI message
                                               -- INDEX (conversation_id, seq)
@@ -30,7 +36,8 @@ vault        (id PK, ciphertext BLOB, iv BLOB, tag BLOB, created_at)
 
 runs         (id PK, conversation_id?, user_id, parent_run_id?,   -- sub-agents later
               trigger 'chat'|'schedule'|'webhook'|'manual',
-              status, model, budgets JSON,
+              status, model, budgets JSON, env_id?,
+              -- env_id: the env the run's tool calls execute in (ADR-015; no FK)
               created_at, started_at?, ended_at?, summary?, error?)
              -- INDEX (status), INDEX (created_at)
 
@@ -71,9 +78,10 @@ snapshots    (id PK, env_id, workspace_id, blob_id FK, note?, created_at)
 
 workspaces   (id PK, user_id, name, path,        -- $FOUNDRY_DATA_DIR/workspaces/<id>
               created_at)
-envs         (id PK, driver 'open_terminal'|'docker', workspace_id?,
-              image, status 'creating'|'ready'|'paused'|'dead',
-              caps JSON, container_ref?, egress_token_hash?,
+envs         (id PK, driver 'open_terminal'|'docker'|'fake'|'executor',
+              workspace_id?, image, status 'creating'|'ready'|'paused'|'dead',
+              caps JSON, container_ref?, egress_token_hash?, workspace_dir?,
+              -- workspace_dir: executor envs' desktop-side dir (ADR-015); null for core-hosted envs
               created_at, last_active_at)
 
 usage        (id INTEGER PK AUTOINC, run_id?, provider, model,

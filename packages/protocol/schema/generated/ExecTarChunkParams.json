@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "required": [
+    "tarId",
+    "index"
+  ],
+  "properties": {
+    "tarId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "index": {
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$id": "ExecTarChunkParams",
+  "title": "ExecTarChunkParams"
+}

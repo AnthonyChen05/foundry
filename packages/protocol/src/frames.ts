@@ -53,7 +53,12 @@ export type ReqFrame = Static<typeof ReqFrameSchema>;
 export type ResFrame = Static<typeof ResFrameSchema>;
 export type EventFrame = Static<typeof EventFrameSchema>;
 
-/** Any inbound client frame (only `req` is valid inbound, res/event inbound is server-side). */
+/**
+ * Any inbound client frame: `req` (normally) or `res` — a connection that has
+ * registered as the user's executor (ADR-015, "exec.register") may also answer
+ * `res` to the server→client requests it receives (executor plane). Everything
+ * else inbound is closed.
+ */
 export const InboundFrameSchema = Type.Union([ReqFrameSchema], {
-  description: "Frames a client may send. Only 'req' is valid inbound.",
+  description: "Frames a client may send: 'req' (all clients) or 'res' (replies to server→client requests on executor connections).",
 });

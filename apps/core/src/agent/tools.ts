@@ -122,7 +122,12 @@ export function builtinAgentTools(): AgentTool[] {
       execute: async (args, ctx) => {
         const command = strArg(args, "command");
         const timeoutS = Math.min(Math.max(numArg(args, "timeout_s") ?? 60, 1), 300);
-        const r = await ctx.env.driver.execShell(ctx.env.envId, command, { timeoutMs: timeoutS * 1000 });
+        // signal → cancel support (ADR-015): run.cancel aborts an in-flight
+        // executor exec; core-side drivers ignore the signal today.
+        const r = await ctx.env.driver.execShell(ctx.env.envId, command, {
+          timeoutMs: timeoutS * 1000,
+          signal: ctx.signal,
+        });
         return { content: execToContent(r), isError: r.exitCode !== 0 ? true : undefined };
       },
     },

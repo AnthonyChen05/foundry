@@ -1,0 +1,18 @@
+{
+  "$id": "ExecTarChunkResult",
+  "type": "object",
+  "required": [
+    "index",
+    "b64"
+  ],
+  "properties": {
+    "index": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "b64": {
+      "type": "string"
+    }
+  },
+  "title": "ExecTarChunkResult"
+}

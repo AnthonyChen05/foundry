@@ -2,10 +2,11 @@
   import { rest } from "$lib/foundry.svelte";
   import type { McpServerConfig } from "@foundry/sdk-ts";
 
-  type Tab = "providers" | "keys" | "schedules" | "hooks" | "mcp";
+  type Tab = "providers" | "keys" | "account" | "schedules" | "hooks" | "mcp";
   const TABS: { id: Tab; label: string }[] = [
     { id: "providers", label: "Providers" },
     { id: "keys", label: "API keys" },
+    { id: "account", label: "Account" },
     { id: "schedules", label: "Schedules" },
     { id: "hooks", label: "Webhooks" },
     { id: "mcp", label: "MCP" },
@@ -205,6 +206,24 @@
     });
   }
 
+  // -- account (ADR-006: password change) ----------------------------------
+
+  let curPw = $state("");
+  let newPw = $state("");
+  let newPw2 = $state("");
+  let pwSaved = $state(false);
+
+  function savePassword(): void {
+    void run(async () => {
+      pwSaved = false;
+      if (newPw.length < 8) throw new Error("New password must be at least 8 characters.");
+      if (newPw !== newPw2) throw new Error("New passwords do not match.");
+      await rest().changePassword(curPw, newPw);
+      curPw = newPw = newPw2 = "";
+      pwSaved = true;
+    });
+  }
+
   // tab switching refreshes the visible section
   $effect(() => {
     switch (tab) {
@@ -308,6 +327,28 @@
           {/each}
         </tbody>
       </table>
+    {:else if tab === "account"}
+      <form class="form" onsubmit={(e) => { e.preventDefault(); savePassword(); }}>
+        <p class="muted">
+          You sign in with your username and this password (sessions last 30 days).
+          API keys are a separate credential for programmatic OpenAI-compatible
+          clients and are unaffected.
+        </p>
+        <div class="field">
+          <label for="a-cur">current password</label>
+          <input id="a-cur" type="password" bind:value={curPw} autocomplete="current-password" />
+        </div>
+        <div class="field">
+          <label for="a-new">new password (min 8 characters)</label>
+          <input id="a-new" type="password" bind:value={newPw} autocomplete="new-password" />
+        </div>
+        <div class="field">
+          <label for="a-new2">repeat new password</label>
+          <input id="a-new2" type="password" bind:value={newPw2} autocomplete="new-password" />
+        </div>
+        <button class="primary" type="submit" disabled={busy}>Change password</button>
+        {#if pwSaved}<p class="muted">Password changed.</p>{/if}
+      </form>
     {:else if tab === "schedules"}
       <div class="form">
         <div class="inline">

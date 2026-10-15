@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "required": [
+    "envId",
+    "path",
+    "b64"
+  ],
+  "properties": {
+    "envId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    },
+    "b64": {
+      "type": "string"
+    },
+    "append": {
+      "type": "boolean"
+    }
+  },
+  "$id": "ExecFilesWriteParams",
+  "title": "ExecFilesWriteParams"
+}

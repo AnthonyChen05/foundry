@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "required": [
+    "envId",
+    "caps"
+  ],
+  "properties": {
+    "envId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "chatId": {
+      "type": "string"
+    },
+    "caps": {
+      "type": "object",
+      "required": [
+        "cpus",
+        "memMib",
+        "pids"
+      ],
+      "properties": {
+        "cpus": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "memMib": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pids": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      }
+    },
+    "image": {
+      "type": "string"
+    }
+  },
+  "$id": "ExecEnvCreateParams",
+  "title": "ExecEnvCreateParams"
+}

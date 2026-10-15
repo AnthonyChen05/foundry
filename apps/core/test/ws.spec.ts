@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setTimeout as delay } from "node:timers/promises";
 import { FoundryClient, type ConnectResultView } from "@foundry/sdk-ts";
-import { startServer, type TestCtx } from "./helpers.js";
+import { TEST_ADMIN_PASSWORD, startServer, type TestCtx } from "./helpers.js";
 
 let ctx: TestCtx;
 let client: FoundryClient;
@@ -94,10 +94,13 @@ describe("WS handshake", () => {
     expect(r2.closeCode).toBe(1008);
   });
 
-  it("exchanges an API key for a session token over WS (auth.login)", async () => {
+  it("logs in with username + password over WS (auth.login) and connects with the session", async () => {
     const sock = client.socket();
     await sock.connect();
-    const login = (await sock.req("auth.login", { apiKey: ctx.server.token })) as { sessionToken: string };
+    const login = (await sock.req("auth.login", {
+      username: "admin",
+      password: TEST_ADMIN_PASSWORD,
+    })) as { sessionToken: string };
     expect(login.sessionToken).toMatch(/^fnds_/);
     const sock2 = new FoundryClient({ baseUrl: ctx.server.baseUrl, token: login.sessionToken }).socket();
     const res2 = await sock2.connect();

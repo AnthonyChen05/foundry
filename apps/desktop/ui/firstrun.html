@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Foundry</title>
+  <style>
+    :root {
+      color-scheme: dark light;
+      --bg: #262624; --bg-side: #1f1e1d; --bg-raised: #30302e;
+      --border: #3e3e38; --border-soft: #2e2e2b;
+      --fg: #f5f4ef; --fg-dim: #a8a49c;
+      --accent: #d97757; --accent-strong: #e28a6c; --accent-fg: #faf9f5;
+      --err: #dd6e63; --ok: #8db087;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #faf9f5; --bg-side: #f0eee6; --bg-raised: #ffffff;
+        --border: #e2ddd3; --border-soft: #ebe7dc;
+        --fg: #26241f; --fg-dim: #6f6a61;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; color: var(--fg);
+      font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      min-height: 100vh; display: grid; place-items: center; padding: 20px;
+    }
+    .card {
+      width: min(420px, 92vw); padding: 30px;
+      background: var(--bg-side); border: 1px solid var(--border-soft);
+      border-radius: 20px; display: flex; flex-direction: column; gap: 12px;
+    }
+    .mark {
+      width: 44px; height: 44px; border-radius: 12px;
+      display: grid; place-items: center;
+      background: rgba(217, 119, 87, 0.14); color: var(--accent);
+    }
+    h1 { margin: 4px 0 0; font-size: 20px; }
+    .hint { margin: 0; font-size: 12px; color: var(--fg-dim); }
+    input, button {
+      border-radius: 10px; border: 1px solid var(--border);
+      background: var(--bg); color: var(--fg);
+      padding: 9px 12px; font-size: 14px;
+    }
+    input:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+    button {
+      cursor: pointer; background: var(--accent); color: var(--accent-fg);
+      border-color: var(--accent); font-weight: 600;
+    }
+    button:hover:not(:disabled) { background: var(--accent-strong); }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .status { min-height: 18px; font-size: 12px; margin: 0; }
+    .status.err { color: var(--err); }
+    .status.ok { color: var(--ok); }
+    .check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+    #sandboxFields { display: flex; flex-direction: column; gap: 8px; }
+    .adv { font-size: 12px; color: var(--fg-dim); }
+  </style>
+</head>
+<body>
+  <form class="card" id="f">
+    <span class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="26" height="26">
+        <path d="M12 2.6 13.7 10.3 21.4 12 13.7 13.7 12 21.4 10.3 13.7 2.6 12 10.3 10.3Z" fill="currentColor" />
+      </svg>
+    </span>
+    <h1>Foundry</h1>
+    <p class="hint">Your self-hosted Foundry core. The same origin serves everything — after this the app is exactly the web client.</p>
+    <input id="url" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:8787" />
+    <label class="check">
+      <input id="local" type="checkbox" /> Run sandboxes locally (Docker Desktop)
+    </label>
+    <div id="sandboxFields" style="display: none">
+      <input id="suser" placeholder="username (owner)" autocomplete="username" spellcheck="false" />
+      <input id="spass" type="password" placeholder="password" autocomplete="current-password" />
+      <input id="scmd" placeholder="advanced: runner command (blank = auto)" spellcheck="false" class="adv" />
+      <p class="hint">Stored locally in foundry.json (plaintext, this machine). Requires Node ≥ 22 and Docker Desktop running.</p>
+    </div>
+    <p class="status" id="status"></p>
+    <button id="go" type="submit">Connect</button>
+  </form>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const status = $("status");
+    const set = (cls, text) => { status.className = "status " + cls; status.textContent = text; };
+    let savedLocal; // get_local_sandbox view when one is configured
+
+    $("url").addEventListener("focus", () => {
+      if ($("url").value === "") $("url").value = "http://127.0.0.1:8787";
+    });
+
+    const localToggle = $("local");
+    localToggle.addEventListener("change", () => {
+      $("sandboxFields").style.display = localToggle.checked ? "flex" : "none";
+    });
+
+    window.__TAURI__.core.invoke("get_local_sandbox").then((v) => {
+      savedLocal = v ?? undefined;
+      if (v?.enabled === true) {
+        localToggle.checked = true;
+        $("sandboxFields").style.display = "flex";
+        if (typeof v.username === "string" && v.username !== "") {
+          $("suser").value = v.username;
+          $("spass").placeholder = "password (saved — type to change)";
+        }
+        if (typeof v.runnerCommand === "string" && v.runnerCommand !== "") {
+          $("scmd").value = v.runnerCommand;
+        }
+      }
+    }).catch(() => { /* fresh install */ });
+
+    window.__TAURI__.core.invoke("get_server_url").then((v) => {
+      if (typeof v === "string" && v !== "") $("url").value = v;
+    }).catch(() => { /* fresh install */ });
+
+    async function reachable(base) {
+      // The core sends no CORS headers, so a plain cross-origin GET can't be
+      // read — `no-cors` makes a REACHABLE server resolve (any HTTP answer)
+      // and an unreachable one reject. That's exactly the check we want.
+      try {
+        await fetch(base + "/healthz", { mode: "no-cors", signal: AbortSignal.timeout(5000) });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    $("f").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = $("go");
+      let url = $("url").value.trim().replace(/\/+$/, "");
+      if (url !== "" && !/^https?:\/\//.test(url)) url = "http://" + url;
+      if (url === "" || !/^https?:\/\/.+/.test(url)) return set("err", "Enter a server URL first.");
+      btn.disabled = true;
+      set("", "Checking " + url + " …");
+      if (!(await reachable(url))) {
+        btn.disabled = false;
+        return set("err", "No server answered at " + url + " — is the core running?");
+      }
+      set("", "Connecting …");
+      try {
+        const localOn = $("local").checked;
+        if (localOn) {
+          const user = $("suser").value.trim();
+          const pass = $("spass").value;
+          const cmd = $("scmd").value.trim();
+          const unchanged = savedLocal?.enabled === true && user !== "" && user === savedLocal.username && pass === "";
+          if (!unchanged && (user === "" || pass === "")) {
+            return set("err", "Username and password are required for the local sandbox.");
+          }
+          // Unchanged (username matched, password left alone) → keep as-is.
+          if (!unchanged) {
+            await window.__TAURI__.core.invoke("set_local_sandbox", {
+              username: user,
+              password: pass,
+              ...(cmd !== "" ? { runnerCommand: cmd } : { runnerCommand: null }),
+            });
+          }
+        } else if (savedLocal?.enabled === true) {
+          // Explicit disable when it was on.
+          await window.__TAURI__.core.invoke("set_local_sandbox", { username: "", password: "", runnerCommand: null });
+        }
+        await window.__TAURI__.core.invoke("set_server_url", { url });
+        set("ok", "Connected — loading Foundry …");
+      } catch (err) {
+        btn.disabled = false;
+        set("err", String(err));
+      }
+    });
+  </script>
+</body>
+</html>

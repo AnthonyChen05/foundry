@@ -3,3 +3,5 @@ packages:
   - packages/sdk-ts
   - apps/core
   - apps/web
+  - apps/desktop
+  - apps/runner

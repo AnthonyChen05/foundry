@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "required": [
+    "envId"
+  ],
+  "properties": {
+    "envId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "cols": {
+      "minimum": 2,
+      "maximum": 500,
+      "type": "integer"
+    },
+    "rows": {
+      "minimum": 2,
+      "maximum": 500,
+      "type": "integer"
+    }
+  },
+  "$id": "ExecOpenPtyParams",
+  "title": "ExecOpenPtyParams"
+}

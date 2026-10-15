@@ -12,6 +12,9 @@ export default tseslint.config(
       "apps/web/.svelte-kit/**",
       "apps/web/build/**",
       "**/*.svelte",
+      // P4 desktop shell: Rust target dir emits generated JS (tauri glue).
+      "apps/desktop/src-tauri/target/**",
+      "apps/desktop/src-tauri/gen/**",
     ],
   },
   js.configs.recommended,

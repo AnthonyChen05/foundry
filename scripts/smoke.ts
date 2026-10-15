@@ -49,7 +49,7 @@ let db: Awaited<ReturnType<typeof openDatabase>> | undefined;
 const sockRefs: { close(): void }[] = [];
 
 async function main(): Promise<void> {
-  const config = { ...loadConfig(), port: 0 };
+  const config = { ...loadConfig(), port: 0, adminPassword: "smoke-admin-password" };
   const vault = Vault.fromEnv();
   db = openDatabase(config.dbPath, { log: () => {}, logWarn: () => {} });
   const boot = await bootstrapServices(db, vault, config, { warn: () => {} });
@@ -58,7 +58,21 @@ async function main(): Promise<void> {
   const addr = runtime.app.server.address();
   assert(addr !== null && typeof addr === "object", "server address available");
   port = addr.port;
-  const client = new FoundryClient({ baseUrl: `http://127.0.0.1:${port}`, token: boot.rootKey?.plaintext });
+  assert(boot.adminCredentials !== undefined, "first boot initialized owner credentials (ADR-006)");
+  const creds = boot.adminCredentials;
+  const anonRest = new FoundryClient({ baseUrl: `http://127.0.0.1:${port}` });
+  // ADR-006: user-facing login = username + password → session token. The
+  // root API key (boot.rootKey) remains the programmatic OpenAI-compatible
+  // credential and is used directly by the /v1/chat/completions sections below.
+  const badLogin = await fetch(`http://127.0.0.1:${port}/v1/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: creds.username, password: "definitely-wrong" }),
+  });
+  assert(badLogin.status === 401, "login rejects a wrong password");
+  const session = await anonRest.login(creds.username, creds.password);
+  const client = new FoundryClient({ baseUrl: `http://127.0.0.1:${port}`, token: session.sessionToken });
+  console.log("smoke: password login → session token ok");
 
   // -- P4: same-origin SPA serving -------------------------------------------
   // Present only when apps/web/build (or FOUNDRY_WEB_DIR) exists — smoke
@@ -227,11 +241,77 @@ async function main(): Promise<void> {
   );
   console.log("smoke: gated agent run via SDK ok (gate_request → approve → done)");
   sock4.close();
+
+  // -- ADR-015: local executor bridge + push to cloud ---------------------------
+  // A fake executor = the RUNNER's real ExecServer fronted by a FakeDriver:
+  // a local agent run's tool calls ride the bridge; push then migrates the
+  // workspace into a backend env and the reconcile run flips the binding.
+  const { ExecServer } = await import("@foundry/runner/exec-server");
+  const { FakeDriver } = await import("@foundry/core/sandbox");
+  const execRoot = join(dataDir, "fake-executor-root");
+  const execServer = new ExecServer({
+    driver: new FakeDriver(),
+    workspaceRoot: execRoot,
+    // The smoke's local run opens no terminals — the PTY pump stays silent.
+    transport: { send: () => {} },
+    tarMode: "host",
+  });
+  const execSock = new FoundryClient({ baseUrl: `http://127.0.0.1:${port}`, token: session.sessionToken })
+    .socket({ clientKind: "executor", clientVersion: "runner/smoke" });
+  execSock.onServerRequest = (req) => execServer.handle(req.id, req.method, req.params);
+  sockRefs.push(execSock);
+  await execSock.connect();
+  const reg = await execSock.execRegister({
+    name: "smoke-executor",
+    version: "0.0.0-smoke",
+    dockerAvailable: true,
+    workspaceRoot: execRoot,
+  });
+  assert(reg.replaced !== true, "first executor registration is not a replacement");
+
+  const localSock = client.socket({ clientKind: "web" });
+  sockRefs.push(localSock);
+  await localSock.connect();
+  const localChat = await localSock.chatCreate({ title: "smoke local", model: "dummy/scripted" });
+  const localStatusesSeen: string[] = [];
+  let toolCallsSeen = 0;
+  const localSent = await localSock.chatSend(
+    { chatId: localChat.id, content: "create hello.py in the sandbox and run it", agent: { enabled: true, location: "local" } },
+    `idem-smoke-local-${Date.now()}`,
+  );
+  localSock.on((event, channel, _seq, payload) => {
+    if (channel !== `run:${localSent.runId}`) return;
+    if (event === "run.status") localStatusesSeen.push(String((payload as Record<string, unknown>)["status"]));
+    if (event === "run.tool_call") toolCallsSeen += 1;
+  });
+  await waitFor(
+    () => localStatusesSeen.includes("done"),
+    15_000,
+    "local run completes over the bridge",
+  );
+  assert(toolCallsSeen > 0, "local run streamed tool_calls over the bridge");
+  assert(execServer.handled > 0, "the executor answered real server→client requests");
+  console.log("smoke: local executor bridge run ok (exec.* over WS, tools in the local workspace)");
+
+  const pushed = await client.pushChat(localChat.id);
+  assert(pushed.pushRunId.startsWith("run_"), "push returns the reconcile run id");
+  assert(pushed.cloudEnvId.startsWith("env_"), "push returns the cloud env id");
+  // pushChat AWAITS the reconcile run — by the time it resolves, the run has
+  // finished; re-subscribing here would miss the status. Assert the outcome.
+  const pushRun = await localSock.runGet({ runId: pushed.pushRunId });
+  assert(pushRun.status === "done" || pushRun.status === "failed", "reconcile run settled");
+  assert(pushRun.status === "done", `reconcile run done (got ${pushRun.status}${pushRun.error !== undefined ? `: ${pushRun.error}` : ""})`);
+  const chatRows = (await localSock.chatList()) as { id: string; location?: string; envId?: string }[];
+  const listed = chatRows.find((c) => c.id === localChat.id);
+  assert(listed?.location === "cloud" && listed.envId === pushed.cloudEnvId, "chat binding flipped to cloud after push");
+  console.log("smoke: push-to-cloud ok (tar → restore → reconcile run → binding cloud)");
+  localSock.close();
+  execSock.close();
 }
 
 main()
   .then(() => {
-    console.log("smoke: OK — gateway (P1), gates (P3), web serving + SDK gate flow (P4) green");
+    console.log("smoke: OK — gateway (P1), gates (P3), web serving + SDK gate flow (P4) + local/push (ADR-015) green");
     return teardown(0);
   })
   .catch((err) => {

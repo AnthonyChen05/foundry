@@ -16,11 +16,21 @@ import type { Message, ModelCaps, RunBudgets, RunStatusValue, TriggerValue } fro
 // users / auth
 // ---------------------------------------------------------------------------
 
-export const users = sqliteTable("users", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  createdAt: integer("created_at").notNull(),
-});
+export const users = sqliteTable(
+  "users",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    /** Login username (user-facing auth, ADR-006). Null on pre-password rows until boot backfills. */
+    username: text("username"),
+    /** scrypt params+salt+hash, "scrypt:N:r:p:salt:hash" — never a password. */
+    passwordHash: text("password_hash"),
+    createdAt: integer("created_at").notNull(),
+  },
+  // SQLite treats NULLs as distinct in unique indexes: legacy rows without a
+  // username coexist, and the single real username is globally unique.
+  (t) => [uniqueIndex("users_username_idx").on(t.username)],
+);
 
 export const apiKeys = sqliteTable(
   "api_keys",
@@ -161,6 +171,9 @@ export const runs = sqliteTable(
     /** True when the run is an autonomous agent loop (P2) — boot-time resume
      *  reconstructs these from run_events; plain chat runs don't resume. */
     agent: integer("agent", { mode: "boolean" }).notNull().default(false),
+    /** The env the run's tool calls executed in (ADR-015 chat binding; no FK —
+     *  envs are mortal and must not block anything on delete). */
+    envId: text("env_id"),
     createdAt: integer("created_at").notNull(),
     startedAt: integer("started_at"),
     endedAt: integer("ended_at"),
@@ -300,7 +313,7 @@ export const envs = sqliteTable(
   "envs",
   {
     id: text("id").primaryKey(),
-    /** 'open_terminal' | 'docker' */
+    /** 'open_terminal' | 'docker' | 'fake' | 'executor' (ADR-015 delegating driver) */
     driver: text("driver").notNull(),
     workspaceId: text("workspace_id").references(() => workspaces.id),
     image: text("image").notNull(),
@@ -310,6 +323,8 @@ export const envs = sqliteTable(
     containerRef: text("container_ref"),
     /** sha256 of the env's scoped egress token; never the token itself (ADR-005) */
     egressTokenHash: text("egress_token_hash"),
+    /** Executor envs: the desktop-side workspace dir (null for core-hosted envs). */
+    workspaceDir: text("workspace_dir"),
     createdAt: integer("created_at").notNull(),
     lastActiveAt: integer("last_active_at"),
   },

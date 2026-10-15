@@ -13,6 +13,7 @@ export {
   FoundrySocket,
   type ConnectResultView,
   type EventHandler,
+  type ServerRequest,
   type SocketOptions,
   type SocketStatus,
 } from "./socket.js";

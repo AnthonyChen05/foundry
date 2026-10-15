@@ -1,0 +1,28 @@
+{
+  "$id": "ExecutorInfo",
+  "type": "object",
+  "required": [
+    "online"
+  ],
+  "properties": {
+    "online": {
+      "type": "boolean"
+    },
+    "name": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "dockerAvailable": {
+      "type": "boolean"
+    },
+    "workspaceRoot": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "title": "ExecutorInfo"
+}

@@ -17,6 +17,21 @@
     "model": {
       "type": "string"
     },
+    "location": {
+      "anyOf": [
+        {
+          "const": "local",
+          "type": "string"
+        },
+        {
+          "const": "cloud",
+          "type": "string"
+        }
+      ]
+    },
+    "envId": {
+      "type": "string"
+    },
     "createdAt": {
       "description": "ISO 8601.",
       "type": "string"

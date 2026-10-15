@@ -114,6 +114,11 @@ const app = $state({
   rightTab: "run" as "run" | "term" | "files",
 
   notifications: [] as Notification[],
+
+  /** Executor presence (ADR-015): undefined = not yet probed; online=false = no local sandbox. */
+  executor: undefined as
+    | { online: boolean; name?: string; version?: string; dockerAvailable?: boolean; workspaceRoot?: string }
+    | undefined,
 });
 
 // ---------------------------------------------------------------------------
@@ -149,11 +154,11 @@ export async function boot(): Promise<void> {
   });
 }
 
-export async function loginWithKey(apiKey: string): Promise<void> {
+export async function loginWithPassword(username: string, password: string): Promise<void> {
   app.connError = "";
   const c = new FoundryClient({ baseUrl: baseUrl() });
   try {
-    const res = await c.login(apiKey.trim());
+    const res = await c.login(username.trim(), password);
     writeToken(res.sessionToken);
     await connect(res.sessionToken);
   } catch (err) {
@@ -214,6 +219,12 @@ async function connect(token: string): Promise<void> {
   }
   app.phase = "ready";
   await refreshChats();
+  // Executor presence (ADR-015): probe once; updates arrive via the event.
+  try {
+    app.executor = await sock.execStatus();
+  } catch {
+    app.executor = { online: false };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +337,22 @@ function handleEvent(event: string, channel: string, seq: number, payload: unkno
       if (app.notifications.length > 20) app.notifications.shift();
       return;
     }
+    case "executor.status": {
+      // ADR-015: the desktop runner registered or dropped. Payload = ExecutorInfo.
+      const online = p["online"] === true;
+      app.executor = online
+        ? {
+            online: true,
+            ...(typeof p["name"] === "string" ? { name: p["name"] } : {}),
+            ...(typeof p["version"] === "string" ? { version: p["version"] } : {}),
+            ...(p["dockerAvailable"] === true || p["dockerAvailable"] === false
+              ? { dockerAvailable: p["dockerAvailable"] as boolean }
+              : {}),
+            ...(typeof p["workspaceRoot"] === "string" ? { workspaceRoot: p["workspaceRoot"] } : {}),
+          }
+        : { online: false };
+      return;
+    }
     default:
       return;
   }
@@ -423,7 +450,7 @@ export function idem(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
-export async function send(chatId: string, content: string, agent: boolean, policy: ToolPolicyRow[], model?: string): Promise<void> {
+export async function send(chatId: string, content: string, agent: boolean, policy: ToolPolicyRow[], model?: string, location?: "local" | "cloud"): Promise<void> {
   const toolPolicy = policy.length === 0
     ? undefined
     : Object.fromEntries(policy.filter((r) => r.tool.trim().length > 0).map((r) => [r.tool.trim(), r.policy]));
@@ -432,7 +459,15 @@ export async function send(chatId: string, content: string, agent: boolean, poli
       chatId,
       content,
       model,
-      agent: agent ? { enabled: true, toolPolicy } : undefined,
+      agent: agent
+        ? {
+            enabled: true,
+            toolPolicy,
+            // ADR-015: "local" crosses to the desktop executor; default cloud
+            // omits the field entirely.
+            ...(agent && location === "local" ? { location: "local" as const } : {}),
+          }
+        : undefined,
     },
     idem("chat"),
   );
@@ -477,6 +512,31 @@ export function draftsFor(chatId: string): { runId: string; text: string }[] {
 /** Live-only events of a run (streaming transcript rows before replay). */
 export function liveFor(runId: string): LiveEvent[] {
   return app.live[runId] ?? [];
+}
+
+/** The active chat's execution binding (ADR-015) for panes + composer chip. */
+export function activeChatBinding(): { location?: "local" | "cloud"; envId?: string } {
+  const chat = app.chats.find((c) => c.id === app.activeChatId);
+  if (chat === undefined || chat.location === undefined) return {};
+  return { location: chat.location, ...(chat.envId !== undefined ? { envId: chat.envId } : {}) };
+}
+
+/** Push the chat's local workspace + deps into a backend env (ADR-015). */
+export async function pushChatToCloud(chatId: string): Promise<void> {
+  app.notifications.push({
+    title: "Pushing to cloud…",
+    body: "Copying files and reconciling dependencies — progress appears in the run timeline.",
+    at: Date.now(),
+  });
+  try {
+    await rest().pushChat(chatId);
+  } catch (err) {
+    app.notifications.push({
+      title: "Push to cloud failed",
+      body: err instanceof Error ? err.message : String(err),
+      at: Date.now(),
+    });
+  }
 }
 
 export function gatesFor(runId: string): Gate[] {
