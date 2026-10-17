@@ -139,7 +139,7 @@ fun FilesScreen(store: AppStore, state: AppState, chatId: String) {
                         val sock = store.socketOrNull()
                         if (sock != null && name.isNotBlank()) {
                             scope.launch {
-                                runCatching {
+                                try {
                                     sock.request(
                                         "files.mkdir",
                                         buildJsonObject {
@@ -148,6 +148,8 @@ fun FilesScreen(store: AppStore, state: AppState, chatId: String) {
                                         },
                                         idem = store.idem("files-mkdir"),
                                     )
+                                } catch (err: FoundryError) {
+                                    error = "mkdir failed: ${err.message}"
                                 }
                                 load(path)
                             }
@@ -171,7 +173,7 @@ fun FilesScreen(store: AppStore, state: AppState, chatId: String) {
                         val sock = store.socketOrNull()
                         if (sock != null) {
                             scope.launch {
-                                runCatching {
+                                try {
                                     sock.request(
                                         "files.rm",
                                         buildJsonObject {
@@ -180,6 +182,8 @@ fun FilesScreen(store: AppStore, state: AppState, chatId: String) {
                                         },
                                         idem = store.idem("files-rm"),
                                     )
+                                } catch (err: FoundryError) {
+                                    error = "rm failed: ${err.message}"
                                 }
                                 load(path)
                             }

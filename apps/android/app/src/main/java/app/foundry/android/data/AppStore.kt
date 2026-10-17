@@ -374,7 +374,7 @@ class AppStore(
 
             "term.data" -> {
                 // §4: terminal bytes as text, or base64; channel term:{termId}.
-                val termId = runOf(event.channel)
+                val termId = event.channel.substringAfter(':')
                 val data = p.str("data") ?: ""
                 if (termId.isEmpty() || data.isEmpty()) return
                 val text = if (p.bool("b64") == true) {
@@ -390,7 +390,7 @@ class AppStore(
             }
 
             "term.exit" -> {
-                val termId = runOf(event.channel)
+                val termId = event.channel.substringAfter(':')
                 if (termId.isEmpty()) return
                 _state.update { st ->
                     val session = st.terminal[termId] ?: TermSession()
