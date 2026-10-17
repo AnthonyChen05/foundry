@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -76,8 +77,14 @@ fun ChatScreen(
         return
     }
 
+    // Server-authoritative history: fetch when this chat has none yet.
+    LaunchedEffect(chatId) {
+        store.selectChat(chatId)
+        if (store.chatById(chatId) == null) store.refreshChats()
+    }
+
     val messages = state.messages[chatId] ?: emptyList()
-    val drafts = state.drafts.values.filter { it.chatId == chatId }
+    val drafts = store.draftsFor(chatId)
     val latestRun = store.runsOfChat(chatId).firstOrNull()
     val chat = store.chatById(chatId)
     val gates = latestRun?.let { store.gatesFor(it.id) } ?: emptyList()
@@ -98,15 +105,20 @@ fun ChatScreen(
     var modelMenu by remember { mutableStateOf(false) }
     val models = state.models.filter { it.enabled }
     var model by remember { mutableStateOf<String?>(null) }
+    // The hub rejects chat.send without a model ("no model: pass model or
+    // create the chat with one") — default-select the first catalog entry.
+    LaunchedEffect(models) {
+        if (model == null && models.isNotEmpty()) model = models.first().id
+    }
 
     val listState = rememberLazyListState()
-    LaunchedEffect(messages.size, drafts.size, drafts.sumOf { it.text.length }) {
+    LaunchedEffect(messages.size, drafts.size, drafts.sumOf { it.second.length }) {
         if (messages.isNotEmpty() || drafts.isNotEmpty()) {
             listState.animateScrollToItem((messages.size + drafts.size).coerceAtLeast(0))
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().imePadding()) {
         // Run row: status + quick entries.
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
@@ -138,11 +150,11 @@ fun ChatScreen(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            items(messages, key = { it.callKey() }) { message ->
+            items(messages, key = { messageKey(it) }) { message ->
                 MessageBubble(message)
             }
-            items(drafts, key = { "draft-${it.text.hashCode()}-${it.chatId}" }) { draft ->
-                DraftBubble(draft.text)
+            items(drafts, key = { "draft-${it.first}" }) { (_, text) ->
+                DraftBubble(text)
             }
             // Open gates of the latest run render inline for direct resolution.
             val latestRunId = latestRun?.id ?: ""
@@ -161,6 +173,14 @@ fun ChatScreen(
 
         // Composer.
         Column(Modifier.fillMaxWidth().padding(8.dp)) {
+            if (state.connError.isNotBlank()) {
+                Text(
+                    state.connError,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 FilterChip(selected = agent, onClick = { agent = !agent }, label = { Text(if (agent) "agent" else "chat") })
                 if (models.isNotEmpty()) {
@@ -216,7 +236,9 @@ fun ChatScreen(
     }
 }
 
-private fun Message.callKey(): String = "m-${role}-${content?.hashCode() ?: 0}-${toolCallId ?: ""}"
+/** Stable LazyColumn key: server message id/seq when present (content hashes collide). */
+private fun messageKey(message: Message): String =
+    message.id ?: message.seq?.let { "m$it" } ?: "h${message.hashCode()}"
 
 private fun List<app.foundry.android.data.ToolPolicyRow>.ifNoneDefault(): List<app.foundry.android.data.ToolPolicyRow> = this
 

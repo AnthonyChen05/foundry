@@ -10,7 +10,8 @@
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Foundry"
         android:allowBackup="false"
-        android:supportsRtl="true">
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"

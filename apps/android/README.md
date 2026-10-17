@@ -59,3 +59,7 @@ Kotlin 2.4 (AGP 9 built-in Kotlin), Gradle 9.4.1, Compose 1.7.6, Material3
   80×24 via `term.open` defaults.
 - Files: browse/read/mkdir/rm (no file upload yet).
 - No FCM (non-goal; pushes are ntfy, self-hosted).
+- `usesCleartextTraffic="true"` is required: the self-hosted core speaks plain
+  http on the LAN/tailnet (no TLS endpoint exists), so the app opts into
+  cleartext globally — the same trade Open WebUI-style clients make on homelab
+  hosts.

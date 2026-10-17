@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
@@ -59,7 +60,7 @@ fun TermScreen(store: AppStore, state: AppState, chatId: String) {
             val params = if (envId != null) {
                 buildJsonObject { put("envId", envId) }
             } else {
-                null
+                buildJsonObject { }
             }
             val payload = sock.request("term.open", params, idem = store.idem("term")) ?: return@LaunchedEffect
             val opened = payload.str("termId") ?: return@LaunchedEffect
@@ -87,7 +88,7 @@ fun TermScreen(store: AppStore, state: AppState, chatId: String) {
 
     val session = termId?.let { state.terminal[it] }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().imePadding()) {
         if (error.isNotBlank()) {
             Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp))
             return@Column

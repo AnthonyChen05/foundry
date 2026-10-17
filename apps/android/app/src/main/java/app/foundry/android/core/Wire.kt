@@ -27,6 +27,8 @@ data class ChatSummary(
  */
 @Serializable
 data class Message(
+    val id: String? = null,
+    val seq: Long? = null,
     val role: String,
     val content: JsonElement? = null,
     val toolCalls: List<ToolCall>? = null,
