@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import type { AppConfig } from "./config.js";
 import type { FoundryDb } from "./db/open.js";
 import type { Vault } from "./vault/vault.js";
+import type { SandboxDriver } from "./sandbox/types.js";
 import { newApiKey } from "./vault/vault.js";
 import { buildApp } from "./server.js";
 import { AuthService, type IssuedKey } from "./auth/auth.js";
@@ -82,6 +83,8 @@ export async function buildRuntime(deps: {
   vault: Vault;
   /** pino logger (optional in tests). */
   log?: { info: (obj: object, msg?: string) => void; warn: (obj: object, msg?: string) => void };
+  /** Test hook: inject a driver instead of makeDriver(config) (liveness specs). */
+  driver?: SandboxDriver;
 }): Promise<FoundryRuntime> {
   const { config, version, db, vault } = deps;
   const logger = deps.log;
@@ -94,7 +97,7 @@ export async function buildRuntime(deps: {
   const chat = new ChatService(db, providers);
   const emit: EmitFn = (event, channel, payload) => hub.publish(event, channel, payload);
   const blobs = new BlobStore(db, config.dataDir);
-  const driver = await makeDriver(config, {
+  const driver = deps.driver ?? await makeDriver(config, {
     warn: (o, m) => logger?.warn(o, m),
   });
   // Executor plane (ADR-015): the desktop runner's WS connection backs a
@@ -189,8 +192,9 @@ export async function buildRuntime(deps: {
     backup,
     onMcpServersChanged: () => void mcp.reload().catch((err) => logLog({ err: String(err) }, "mcp reload after admin PUT failed")),
   });
-  // Egress plane (ADR-005): sandbox containers' only route back in.
-  registerEgress(app, { sandbox, chat, providers, emit });
+  // Egress plane (ADR-005): sandbox containers' only route back in. P5 shares
+  // the REST-plane bucket per env (ADR-016).
+  registerEgress(app, { sandbox, chat, providers, emit, meter: limits.api });
 
   // P4: serve the SPA from the same origin when a web build is present
   // (FOUNDRY_WEB_DIR or the standard repo locations). Absent → API-only mode.

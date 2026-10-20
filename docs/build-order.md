@@ -39,7 +39,10 @@ Acceptance:
 - `curl -N` streaming completion from dummy AND a real openai_compat endpoint
   (Ollama if available) with correct SSE chunks + `[DONE]` + usage.
 - Open WebUI added as custom OpenAI-compatible provider → streaming chat works
-  (manual check, note in PR).
+  (manual check, note in PR). ✅ VERIFIED 2026-10-20: Open WebUI 0.6 container
+  with `OPENAI_API_BASE_URL` → core — both dummy models in its catalog, and a
+  streamed chat through its `/api/chat/completions` shows Foundry's
+  token-by-token SSE + `[DONE]`.
 - WS client: send → receive deltas → final persisted; reconnect replays
   buffered events from `lastSeq`.
 - Kill core mid-stream → restart → history intact.

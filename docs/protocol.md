@@ -199,6 +199,9 @@ OpenAI chat-completions (stream + non-stream) and:
   can be attributed by sending its `X-Foundry-Run-Id` header — linked runs are
   NEVER status-bumped or appended to by their sandbox's own LLM sub-calls;
 - `GET /v1/egress/models` lists enabled models only.
+- (P5) the completions route is metered per env (one bucket per `esc` env;
+  `FOUNDRY_RATE_API_PER_MIN`) — 429 in the OpenAI envelope; the models route
+  stays unmetered. A sandbox can't hammer provider calls at unlimited rate.
 
 Non-LLM egress is controlled by the OT egress firewall (`allowlist` mode;
 `FOUNDRY_SANDBOX_EGRESS=open` on kernels without ipset — Docker Desktop).
@@ -383,3 +386,11 @@ FileEntry = { path, size, mtime, isDir }
   `envId` in term.open/files.* must belong to the caller); (c) §2.1 gained
   the audit/backup admin routes + completions rate limit (429 envelope);
   (d) `POST /v1/chats/:chatId/push` refuses foreign chats with the same 404.
+- v0 (2026-10-20, close-out, additive): run liveness + egress metering. (a)
+  OT env creation fails FAST when the container dies during startup (502
+  "exited during startup <exit code>" — the driver probes container liveness
+  alongside OT readiness instead of waiting out the 120s window; the agent
+  run fails through the normal path with a timeline `error` event); (b)
+  `/v1/egress/chat/completions` is metered per env (429 envelope, §2.0a);
+  (c) sdk-ts gained `adminListAudit` / `adminRunBackup` / `adminListBackups`
+  and the web settings gained a System tab (audit log + backup trigger/list).

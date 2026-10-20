@@ -221,4 +221,41 @@ export class FoundryClient {
   adminDeleteHook(id: string): Promise<{ ok: boolean }> {
     return this.json("DELETE", `/v1/admin/hooks/${encodeURIComponent(id)}`);
   }
+
+  // -- admin: audit + backups (P5) ---------------------------------------------------
+
+  adminListAudit(limit?: number): Promise<{ events: AuditEvent[] }> {
+    const q = limit === undefined ? "" : `?limit=${limit}`;
+    return this.json("GET", `/v1/admin/audit${q}`);
+  }
+
+  /** Snapshot + incremental blob copy; 409 FoundryError while one is busy. */
+  adminRunBackup(): Promise<BackupResult> {
+    return this.json("POST", "/v1/admin/backup", {});
+  }
+
+  adminListBackups(): Promise<{ backups: { dir: string; bytes: number }[] }> {
+    return this.json("GET", "/v1/admin/backups");
+  }
+}
+
+/** One append-only audit row (GET /v1/admin/audit). */
+export interface AuditEvent {
+  id: number;
+  at: number;
+  userId: string | null;
+  action: string;
+  target: string | null;
+  outcome: string;
+  meta?: Record<string, unknown> | null;
+}
+
+/** POST /v1/admin/backup result. */
+export interface BackupResult {
+  dir: string;
+  dbBytes: number;
+  blobFiles: number;
+  blobBytes: number;
+  durationMs: number;
+  blobsSkippedFromPrior: number;
 }

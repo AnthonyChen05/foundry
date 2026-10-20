@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { setTimeout as delay } from "node:timers/promises";
 import { readFileSync } from "node:fs";
 import { FoundryClient } from "@foundry/sdk-ts";
+import { DockerLauncher, OtClient } from "@foundry/core/sandbox";
 import { startServer, type TestCtx } from "./helpers.js";
 
 /**
@@ -129,4 +130,26 @@ d("Open Terminal sandbox (real container)", () => {
     const allowed = await env.driver.execShell(env.envId, `curl -sS --max-time 5 -o /dev/null -w '%{http_code}' http://host.docker.internal:${port}/healthz`, { timeoutMs: 15_000 });
     expect(allowed.stdout.trim()).toBe("200");
   }, 90_000);
+
+  it("env creation fails fast when the container dies during startup (no 120s zombie)", async () => {
+    // A container that exits the moment it starts must abort the OT-ready
+    // wait in ~1s — with a distinguishing 502 — not burn the full 120s
+    // window polling a dead endpoint (run-liveness.spec.ts locks the run
+    // level; this locks the driver level).
+    const image = process.env.FOUNDRY_SANDBOX_IMAGE ?? "ghcr.io/open-webui/open-terminal:latest";
+    const launcher = new DockerLauncher({ sandboxImage: image, sandboxRuntime: "runc" });
+    await launcher.pullIfMissing(image);
+    const container = await launcher.docker.createContainer({ Image: image, Cmd: ["sh", "-c", "exit 1"] });
+    const ot = new OtClient("http://127.0.0.1:1", "probe");
+    const started = Date.now();
+    await expect(launcher.awaitOtReady(container, ot, image)).rejects.toMatchObject({
+      status: 502,
+      message: expect.stringContaining("exited during startup"),
+    });
+    expect(Date.now() - started).toBeLessThan(20_000);
+    // awaitOtReady removed the dead container
+    await wait(async () => {
+      return launcher.docker.getImage(container.id).inspect().then(() => false, () => true);
+    }, "dead container removed", 5000);
+  }, 60_000);
 });

@@ -6,6 +6,7 @@ import { loadConfig, type AppConfig } from "../src/config.js";
 import { openDatabase } from "../src/db/open.js";
 import { Vault } from "../src/vault/vault.js";
 import { bootstrapServices, buildRuntime, type FoundryRuntime } from "../src/runtime.js";
+import type { SandboxDriver } from "../src/sandbox/types.js";
 
 /**
  * Test harness: isolated data dir + db + full runtime on an ephemeral port,
@@ -38,8 +39,10 @@ afterEach(async () => {
 });
 
 /** Boot a full runtime on an ephemeral port in a fresh temp dir. Unit specs
- * always get the fake sandbox driver; docker.spec.ts opts into the real one. */
-export async function startServer(overrides?: Partial<AppConfig>): Promise<TestCtx> {
+ * always get the fake sandbox driver; docker.spec.ts opts into the real one.
+ * `opts.driver` injects a custom driver (liveness specs), taking precedence
+ * over the config-selected one. */
+export async function startServer(overrides?: Partial<AppConfig>, opts?: { driver?: SandboxDriver }): Promise<TestCtx> {
   const dataDir = mkdtempSync(join(tmpdir(), "foundry-test-"));
   const config: AppConfig = {
     ...loadConfig(),
@@ -60,7 +63,13 @@ export async function startServer(overrides?: Partial<AppConfig>): Promise<TestC
   const vault = Vault.fromEnv();
   const db = openDatabase(config.dbPath, { log: () => {}, logWarn: () => {} });
   const boot = await bootstrapServices(db, vault, config, { warn: () => {} });
-  const rt = await buildRuntime({ config, version: "0.0.0-test", db, vault });
+  const rt = await buildRuntime({
+    config,
+    version: "0.0.0-test",
+    db,
+    vault,
+    ...(opts?.driver !== undefined ? { driver: opts.driver } : {}),
+  });
   await rt.app.listen({ port: 0, host: "127.0.0.1" });
   const addr = rt.app.server.address();
   if (addr === null || typeof addr !== "object") throw new Error("no server address");

@@ -2,7 +2,7 @@
   import { rest } from "$lib/foundry.svelte";
   import type { McpServerConfig } from "@foundry/sdk-ts";
 
-  type Tab = "providers" | "keys" | "account" | "schedules" | "hooks" | "mcp";
+  type Tab = "providers" | "keys" | "account" | "schedules" | "hooks" | "mcp" | "system";
   const TABS: { id: Tab; label: string }[] = [
     { id: "providers", label: "Providers" },
     { id: "keys", label: "API keys" },
@@ -10,6 +10,7 @@
     { id: "schedules", label: "Schedules" },
     { id: "hooks", label: "Webhooks" },
     { id: "mcp", label: "MCP" },
+    { id: "system", label: "System" },
   ];
 
   let tab = $state<Tab>("providers");
@@ -224,6 +225,49 @@
     });
   }
 
+  // -- system (P5): audit log + backups ------------------------------------
+
+  interface AuditRow {
+    id: number;
+    at: number;
+    userId: string | null;
+    action: string;
+    target: string | null;
+    outcome: string;
+    meta?: Record<string, unknown> | null;
+  }
+
+  let auditRows = $state<AuditRow[]>([]);
+  let auditLimit = $state(200);
+  let backups = $state<{ dir: string; bytes: number }[]>([]);
+
+  function refreshAudit(): void {
+    void run(async () => {
+      auditRows = (await rest().adminListAudit(auditLimit)).events;
+    });
+  }
+
+  function refreshBackups(): void {
+    void run(async () => {
+      backups = (await rest().adminListBackups()).backups;
+    });
+  }
+
+  function runBackup(): void {
+    void run(async () => {
+      await rest().adminRunBackup();
+      refreshBackups();
+    });
+  }
+
+  function fmtBytes(n: number): string {
+    return n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / 1048576).toFixed(1)} MiB`;
+  }
+
+  function fmtAt(at: number): string {
+    return new Date(at).toLocaleString();
+  }
+
   // tab switching refreshes the visible section
   $effect(() => {
     switch (tab) {
@@ -241,6 +285,10 @@
         break;
       case "mcp":
         refreshMcp();
+        break;
+      case "system":
+        refreshAudit();
+        refreshBackups();
         break;
     }
   });
@@ -411,6 +459,46 @@
             </tr>
           {:else}
             <tr><td colspan="3" class="muted">No webhooks.</td></tr>
+          {/each}
+        </tbody>
+      </table>
+    {:else if tab === "system"}
+      <div class="form">
+        <div class="inline">
+          <input type="number" min="1" max="1000" bind:value={auditLimit} />
+          <button class="ghost" onclick={refreshAudit} disabled={busy}>Refresh log</button>
+          <button class="primary" onclick={runBackup} disabled={busy}>Run backup now</button>
+          <button class="ghost" onclick={refreshBackups} disabled={busy}>Refresh backups</button>
+        </div>
+      </div>
+      <h3>Backups</h3>
+      <table>
+        <thead><tr><th>dir</th><th>size</th></tr></thead>
+        <tbody>
+          {#each backups as b (b.dir)}
+            <tr>
+              <td>{b.dir}</td>
+              <td>{fmtBytes(b.bytes)}</td>
+            </tr>
+          {:else}
+            <tr><td colspan="2" class="muted">No backups yet.</td></tr>
+          {/each}
+        </tbody>
+      </table>
+      <h3>Audit log</h3>
+      <table>
+        <thead><tr><th>when</th><th>user</th><th>action</th><th>target</th><th>outcome</th></tr></thead>
+        <tbody>
+          {#each auditRows as e (e.id)}
+            <tr>
+              <td>{fmtAt(e.at)}</td>
+              <td class="muted">{e.userId === null ? "—" : e.userId}</td>
+              <td>{e.action}</td>
+              <td class="muted">{e.target ?? ""}</td>
+              <td class={e.outcome !== "ok" ? "error-text" : undefined}>{e.outcome}</td>
+            </tr>
+          {:else}
+            <tr><td colspan="5" class="muted">Nothing audited yet.</td></tr>
           {/each}
         </tbody>
       </table>

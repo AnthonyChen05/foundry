@@ -5,6 +5,7 @@ import type { Message } from "@foundry/protocol";
 import type { ChatService, EmitFn } from "./chat.js";
 import type { SandboxService } from "../sandbox/service.js";
 import type { ProviderStore } from "../providers/store.js";
+import type { RateLimiter } from "./limits.js";
 import type { ToolChoice, ToolDefinition } from "../providers/types.js";
 import { ProviderError } from "../providers/types.js";
 import type { ChatChunk } from "../providers/types.js";
@@ -29,6 +30,13 @@ export interface EgressDeps {
   providers: ProviderStore;
   /** Event sink for timeline streaming (hub.publish — run.delta etc.). */
   emit: EmitFn;
+  /**
+   * P5: per-environment meter for the completions route (ADR-016 extends to
+   * the egress plane — a runaway tool loop can't hammer provider calls at
+   * unlimited rate through the proxy). Keyed per env; one bucket reuses the
+   * REST-plane rate.
+   */
+  meter?: RateLimiter;
 }
 
 interface EgressAuth {
@@ -88,6 +96,13 @@ export function registerEgress(app: FastifyInstance, deps: EgressDeps): void {
     const info = authenticate(request);
     if (info === undefined) {
       await reply.code(401).send(egressError(401, "invalid egress token"));
+      return;
+    }
+
+    // P5: per-env meter (keyed by envId — all of one env's traffic shares a
+    // bucket). The models route above stays unmetered (cheap, cache-friendly).
+    if (deps.meter !== undefined && !deps.meter.take(`egress:${info.envId}`)) {
+      await reply.code(429).send(egressError(429, "rate limit exceeded"));
       return;
     }
 

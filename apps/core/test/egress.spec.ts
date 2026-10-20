@@ -7,8 +7,8 @@ import { startServer, type TestCtx } from "./helpers.js";
 
 let ctx: TestCtx;
 
-async function boot(): Promise<{ uid: string; token: string }> {
-  ctx = await startServer();
+async function boot(overrides?: Parameters<typeof startServer>[0]): Promise<{ uid: string; token: string }> {
+  ctx = await startServer(overrides);
   const auth = ctx.server.rt.auth.verifyToken(ctx.server.token);
   if (auth === undefined) throw new Error("test token doesn't resolve");
   const uid = auth.userId;
@@ -74,6 +74,31 @@ describe("Egress completions", () => {
     expect(evs.some((e) => e.type === "raw_provider_response")).toBe(true);
     const raw = evs.find((e) => e.type === "raw_provider_request");
     expect(JSON.stringify(raw?.payload)).not.toContain("esc_"); // keys redacted
+  });
+
+  it("meters the completions route per env — 429 envelope; models stays unmetered", async () => {
+    const { token } = await boot({ rateApiPerMin: 2 });
+    const auth = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    const post = async (): Promise<number> =>
+      (
+        await fetch(`${ctx.server.baseUrl}/v1/egress/chat/completions`, {
+          method: "POST",
+          headers: auth,
+          body: JSON.stringify({ model: "dummy/scripted", messages: [{ role: "user", content: "metered" }] }),
+        })
+      ).status;
+    expect(await post()).toBe(200);
+    expect(await post()).toBe(200);
+    const third = await fetch(`${ctx.server.baseUrl}/v1/egress/chat/completions`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ model: "dummy/scripted", messages: [{ role: "user", content: "metered" }] }),
+    });
+    expect(third.status).toBe(429);
+    expect(((await third.json()) as { error?: { message?: string } }).error?.message).toBe("rate limit exceeded");
+    // the cheap models route is not metered by the completions bucket
+    const models = await fetch(`${ctx.server.baseUrl}/v1/egress/models`, { headers: { Authorization: `Bearer ${token}` } });
+    expect(models.status).toBe(200);
   });
 
   it("journals under X-Foundry-Run-Id when the run is live and owned by the token's user", async () => {

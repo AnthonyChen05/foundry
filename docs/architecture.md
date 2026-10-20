@@ -149,6 +149,16 @@ without changing the one-process shape (ADR-016/017/018):
   (`FOUNDRY_SANDBOX_RUNTIME` core / `--runtime` runner, e.g. gVisor's
   `runsc`) — set on every container HostConfig the process launches;
   unset = byte-identical requests as before.
+- **Run liveness**: when a sandbox container dies during startup (bad image,
+  firewall bootstrap failure), the driver fails the env creation in seconds —
+  it probes container liveness alongside OT readiness instead of waiting out
+  the 120s ready window — and the agent run fails through the normal path
+  (`run.status failed` + `error` run_event + ntfy), never parking in
+  `running` on a dead env.
+- **Egress metering**: the egress completions route is metered per env
+  (same bucket family as the REST plane; 429 in the OpenAI envelope), so a
+  runaway tool loop inside a sandbox can't hammer provider calls at
+  unlimited rate.
 
 ### First-party clients
 

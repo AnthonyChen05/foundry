@@ -115,20 +115,7 @@ export class DockerLauncher {
     });
     await container.start();
     const ot = new OtClient(`http://127.0.0.1:${hostPort}`, opts.apiKey);
-    const deadline = Date.now() + OT_READY_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      const ok = await ot
-        .listDir("/")
-        .then(() => true)
-        .catch(() => false);
-      if (ok) break;
-      await new Promise<void>((r) => setTimeout(r, 500));
-    }
-    const probe = await ot.listDir("/").catch(() => undefined);
-    if (probe === undefined) {
-      await container.remove({ force: true }).catch(() => {});
-      throw new SandboxError(`open-terminal container did not become ready (image ${image})`, 502);
-    }
+    await this.awaitOtReady(container, ot, image);
     return {
       envId: `docker-${container.id}`,
       containerRef: container.id,
@@ -136,6 +123,41 @@ export class DockerLauncher {
       env: { ...(opts.env ?? {}) },
       ot,
     };
+  }
+
+  /**
+   * Wait for the OT server inside a freshly started container. Two failure
+   * paths: the container DIED during startup (bad env/firewall/image — exit
+   * lands within seconds; fail fast instead of burning the full 120s window
+   * polling a dead endpoint) or OT never came up (SandboxError 502, container
+   * removed). The docker probe keeps liveness checks at 500ms cadence.
+   */
+  async awaitOtReady(container: Dockerode.Container, ot: OtClient, image: string): Promise<void> {
+    const deadline = Date.now() + OT_READY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const ok = await ot
+        .listDir("/")
+        .then(() => true)
+        .catch(() => false);
+      if (ok) return;
+      const state = await container
+        .inspect()
+        .then((i) => i.State)
+        .catch(() => undefined);
+      if (state !== undefined && state.Running !== true) {
+        await container.remove({ force: true }).catch(() => {});
+        throw new SandboxError(
+          `open-terminal container exited during startup (exit code ${state.ExitCode ?? "?"}, image ${image})`,
+          502,
+        );
+      }
+      await new Promise<void>((r) => setTimeout(r, 500));
+    }
+    const probe = await ot.listDir("/").catch(() => undefined);
+    if (probe === undefined) {
+      await container.remove({ force: true }).catch(() => {});
+      throw new SandboxError(`open-terminal container did not become ready (image ${image})`, 502);
+    }
   }
 }
 
