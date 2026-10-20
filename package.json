@@ -1,6 +1,6 @@
 {
   "name": "foundry",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Self-hosted backend for LLM frontends: gateway + provider switchboard + agent runtime + sandbox",

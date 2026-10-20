@@ -1,6 +1,6 @@
 {
   "name": "@foundry/sdk-ts",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Thin client SDK for Foundry: typed WS frames + REST helpers (built out in P1)",
   "type": "module",
   "main": "./dist/index.js",
