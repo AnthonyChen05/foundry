@@ -241,22 +241,21 @@
   let auditLimit = $state(200);
   let backups = $state<{ dir: string; bytes: number }[]>([]);
 
-  function refreshAudit(): void {
+  // One op per panel change: run()'s busy gate would silently skip a second
+  // back-to-back refresh, so audit + backups load together.
+  function refreshSystem(): void {
     void run(async () => {
-      auditRows = (await rest().adminListAudit(auditLimit)).events;
-    });
-  }
-
-  function refreshBackups(): void {
-    void run(async () => {
-      backups = (await rest().adminListBackups()).backups;
+      const [audit, backupList] = await Promise.all([rest().adminListAudit(auditLimit), rest().adminListBackups()]);
+      auditRows = audit.events;
+      backups = backupList.backups;
     });
   }
 
   function runBackup(): void {
     void run(async () => {
       await rest().adminRunBackup();
-      refreshBackups();
+      const backupList = await rest().adminListBackups();
+      backups = backupList.backups;
     });
   }
 
@@ -287,8 +286,7 @@
         refreshMcp();
         break;
       case "system":
-        refreshAudit();
-        refreshBackups();
+        refreshSystem();
         break;
     }
   });
@@ -466,9 +464,9 @@
       <div class="form">
         <div class="inline">
           <input type="number" min="1" max="1000" bind:value={auditLimit} />
-          <button class="ghost" onclick={refreshAudit} disabled={busy}>Refresh log</button>
+          <button class="ghost" onclick={refreshSystem} disabled={busy}>Refresh log</button>
           <button class="primary" onclick={runBackup} disabled={busy}>Run backup now</button>
-          <button class="ghost" onclick={refreshBackups} disabled={busy}>Refresh backups</button>
+          <button class="ghost" onclick={refreshSystem} disabled={busy}>Refresh backups</button>
         </div>
       </div>
       <h3>Backups</h3>

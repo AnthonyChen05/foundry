@@ -46,6 +46,21 @@ webhook triggers, long-term memory in sqlite-vec, and MCP servers as tools.
 Runs are resumable, append-only event logs. Push via ntfy; remote access via
 Tailscale; zero cloud.
 
+## What it looks like
+
+The web client (served same-origin by core) after a real session against the
+sandbox:
+
+<p align="center">
+  <img src="docs/screenshots/01-chat.png" width="820" alt="Chat — live streaming reply, conversation list, and the run inspector (Run / Term / Files) on the right"/>
+</p>
+<p align="center">
+  <img src="docs/screenshots/02-gate.png" width="820" alt="Run timeline — a sandboxed shell call is parked on an approval gate; scope + Approve/Deny; live tool events stream below"/>
+</p>
+<p align="center">
+  <img src="docs/screenshots/04-term.png" width="820" alt="Inspector terminal tab — a live PTY into the sandboxed Open Terminal container (prompt, ls output, echo roundtrip)"/>
+</p>
+
 ## The sync principle
 
 The backend is the **sync engine**. All frontends are thin views + command
