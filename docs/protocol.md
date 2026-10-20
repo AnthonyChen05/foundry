@@ -87,6 +87,11 @@ First frame MUST be `connect`; anything else → hard close.
 | `exec.pty.data` | `{ ptyId, data(b64) }` → `{}` | executor PTY pump → `term.data`; no idem |
 | `exec.pty.exit` | `{ ptyId, code }` → `{}` | executor PTY exit → `term.exit` |
 
+(P5 hardening) `chat.send` is rate-limited per user (`capacity` error) and
+quota-limited per user's concurrent runs; `run.*`, and the term/files planes
+with an explicit (or implicit) env, resolve through per-user ownership —
+another user's run/env/chat answers the SAME `not_found` as an unknown one.
+
 ### §1.3a Executor plane (server→client requests, ADR-015)
 
 After `connect`, a client calls `exec.register` to become the user's local
@@ -250,6 +255,19 @@ copy, the DB stores hashes). OpenAI error envelope `{ error: { code, message } }
 - `GET /term` — xterm.js terminal test page (dev convenience; P4 replaces it
   with the web client). Holds no special auth — the page authenticates itself
   over WS `connect`.
+- (P5) `GET /v1/admin/audit` → `{ events: [{ id, at, userId, action, target,
+  outcome, meta }] }` — the append-only audit log (ADR-017), newest first;
+  `?limit=` caps the page (default 100).
+- (P5) `POST /v1/admin/backup` → `BackupResult` — an online snapshot +
+  incremental blob copy written under `$FOUNDRY_DATA_DIR/backups/<ts>/`
+  (ADR-017); 409 `a backup is already running` while a run is mid-flight.
+- (P5) `GET /v1/admin/backups` → `{ backups: [{ dir, bytes }] }` — newest
+  first, the same listing the rotation prunes against.
+- (P5) Rate limits: `POST /v1/chat/completions` is metered per identity
+  (`FOUNDRY_RATE_API_PER_MIN`) and answers 429 in the OpenAI envelope
+  (`{ error: { message: "rate limit exceeded", type: "api_error" } }`)
+  without doing provider work; the metered routes are the completion
+  endpoints only.
 
 ## 3. Core shapes (TypeBox, normative — implement exactly)
 
@@ -356,3 +374,12 @@ FileEntry = { path, size, mtime, isDir }
   into a per-chat cloud workspace, then an agent run (trigger "push")
   reconstructs the environment from the chat's install history; the binding
   flips to cloud on completion (`sys.resync` on `chat:{id}`).
+- v0 (2026-10-20, P5, additive): hardening. (a) `chat.send` can answer
+  `capacity` (`chat rate limit exceeded` after FOUNDRY_RATE_CHAT_PER_MIN /
+  `concurrent run limit reached` after FOUNDRY_MAX_CONCURRENT_RUNS) BEFORE
+  any persistence — a denied send leaves no user message or run row; (b)
+  run.get/events/cancel/approve and the term/files planes reject another
+  user's run with the SAME 404 as an unknown one (multi-user audit; explicit
+  `envId` in term.open/files.* must belong to the caller); (c) §2.1 gained
+  the audit/backup admin routes + completions rate limit (429 envelope);
+  (d) `POST /v1/chats/:chatId/push` refuses foreign chats with the same 404.

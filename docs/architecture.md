@@ -123,6 +123,33 @@ LLM inspects the workspace and the chat's shell history (run_events) and
 reinstalls what is missing; on done the binding flips to `"cloud"`
 (`sys.resync` to clients). Failures keep the chat local.
 
+### Hardening plane (P5)
+
+Single-tenant today, multi-user tomorrow — the P5 plane makes the seams real
+without changing the one-process shape (ADR-016/017/018):
+
+- **Ownership**: every run/env/chat addressed through `run.*` / `term.*` /
+  `files.*` resolves through per-user asserts first — another user's id and
+  an unknown id are the same 404 (no existence disclosure). ADR-015's
+  executor bridge inherits this: requests to a local env verify via the
+  env→workspace→user path.
+- **Limits**: per-identity token buckets meter the two expensive boundaries —
+  WS `chat.send` (`FOUNDRY_RATE_CHAT_PER_MIN`) and the OpenAI completions
+  plane (`FOUNDRY_RATE_API_PER_MIN` → 429 envelope). Per-user concurrent
+  runs are capped by a stateless count of in-flight rows in the runs table
+  (`FOUNDRY_MAX_CONCURRENT_RUNS`). Denials use code `capacity` and happen
+  before persistence.
+- **Audit**: append-only `audit` table + `GET /v1/admin/audit` — auth tries,
+  gate resolutions, admin mutations, executor registrations, pushes, manual
+  backups. Fire-and-forget recording; redaction = run_events discipline.
+- **Backups**: periodic (default daily, `FOUNDRY_BACKUP_MIN`) + manual
+  (`POST /v1/admin/backup`) online sqlite snapshot + incremental copy of the
+  sha256-addressed blob store, keep 7 (`GET /v1/admin/backups` lists).
+- **Sandbox runtime**: opt-in alternate OCI runtime per process
+  (`FOUNDRY_SANDBOX_RUNTIME` core / `--runtime` runner, e.g. gVisor's
+  `runsc`) — set on every container HostConfig the process launches;
+  unset = byte-identical requests as before.
+
 ### First-party clients
 
 All are thin views + command senders over server-authoritative state (the

@@ -36,9 +36,17 @@ import {
 const OT_READY_TIMEOUT_MS = 120_000;
 
 export class DockerLauncher {
+  /**
+   * P5: opt-in alternate OCI runtime for every sandbox container (gVisor's
+   * `runsc`; the empty object for the daemon default keeps the request
+   * byte-shape stable in tests).
+   */
+  static runtimeField(runtime: string): { Runtime: string } | Record<string, never> {
+    return runtime === "" || runtime === "runc" ? {} : { Runtime: runtime };
+  }
   readonly docker: Dockerode;
 
-  constructor(private readonly config: Pick<AppConfig, "sandboxImage">) {
+  constructor(private readonly config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime">) {
     this.docker = new Dockerode();
   }
 
@@ -102,6 +110,7 @@ export class DockerLauncher {
         CapAdd: ["SETUID", "SETGID", "NET_ADMIN"], // then drops NET_ADMIN
         ExtraHosts: ["host.docker.internal:host-gateway"],
         AutoRemove: false,
+        ...DockerLauncher.runtimeField(this.config.sandboxRuntime),
       },
     });
     await container.start();
@@ -156,7 +165,7 @@ export class OpenTerminalDriver implements SandboxDriver {
   /** envId → live client + container id (in-memory; DB rows are service-level). */
   private readonly live = new Map<string, { ot: OtClient; containerId: string; workspaceDir: string }>();
 
-  constructor(config: Pick<AppConfig, "sandboxImage">) {
+  constructor(config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime">) {
     this.launcher = new DockerLauncher(config);
   }
 
@@ -331,9 +340,11 @@ export class OpenTerminalDriver implements SandboxDriver {
 export class DockerDriver implements SandboxDriver {
   readonly name = "docker" as const;
   private readonly launcher: DockerLauncher;
+  private readonly config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime">;
   private readonly live = new Map<string, { containerId: string; workspaceDir: string }>();
 
-  constructor(config: Pick<AppConfig, "sandboxImage">) {
+  constructor(config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime">) {
+    this.config = config;
     this.launcher = new DockerLauncher(config);
   }
 
@@ -360,6 +371,7 @@ export class DockerDriver implements SandboxDriver {
         PidsLimit: 256,
         CapDrop: ["ALL"],
         ExtraHosts: ["host.docker.internal:host-gateway"],
+        ...DockerLauncher.runtimeField(this.config.sandboxRuntime),
       },
     });
     await container.start();

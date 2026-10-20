@@ -306,6 +306,18 @@ export class SandboxService {
     return this.dbx.db.select().from(envs).where(eq(envs.id, envId)).get() ?? undefined;
   }
 
+  /**
+   * P5 multi-user audit: an env's owning user via its workspace, or undefined
+   * when the env/workspace is unknown. term/files resolve through this so an
+   * explicit envId can no longer reach another user's sandbox.
+   */
+  envOwner(envId: string): string | undefined {
+    const row = this.getEnvRow(envId);
+    const wsId = row?.workspaceId;
+    if (wsId === undefined || wsId === null) return undefined;
+    return this.dbx.db.select({ userId: workspaces.userId }).from(workspaces).where(eq(workspaces.id, wsId)).get()?.userId;
+  }
+
   getEnvMust(envId: string): EnvHandle {
     const row = this.getEnvRow(envId);
     if (row === undefined || row.status === "dead") throw new UnknownEnvError(envId);
@@ -448,6 +460,8 @@ export async function makeDriver(
  */
 export async function makeOtDriver(
   sandboxImage: string,
+  /** P5 hardening: opt-in OCI runtime (FOUNDRY_SANDBOX_RUNTIME / --runtime). */
+  sandboxRuntime = "runc",
 ): Promise<OpenTerminalDriver> {
-  return new OpenTerminalDriver({ sandboxImage });
+  return new OpenTerminalDriver({ sandboxImage, sandboxRuntime });
 }

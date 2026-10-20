@@ -12,6 +12,7 @@ import type { AppConfig } from "../config.js";
 import type { FoundryDb } from "../db/open.js";
 import { conversations, runEvents, runs } from "../db/schema.js";
 import type { ExecutorRegistry } from "./registry.js";
+import type { AuditService } from "../audit/audit.js";
 
 /**
  * PushService (ADR-015 "push to cloud"): migrates a chat that executed LOCAL
@@ -51,6 +52,8 @@ export class PushService {
       registry: ExecutorRegistry;
       agents: AgentRunner;
       notify?: NotifyService;
+      /** P5 audit (optional). */
+      audit?: AuditService;
       emit: EmitFn;
       log?: (obj: object, msg: string) => void;
     },
@@ -58,6 +61,11 @@ export class PushService {
 
   /** Validate → migrate the workspace → reconcile deps via an agent run. */
   async pushChatToCloud(userId: string, chatId: string): Promise<PushOutcome> {
+    // Multi-user-ready (P5): the caller must own the chat — 404 either way so
+    // a wrong id and a foreign id are indistinguishable.
+    const owned = this.deps.dbx.db.select({ userId: conversations.userId }).from(conversations).where(eq(conversations.id, chatId)).get();
+    if (owned === undefined) throw new PushRejected("unknown chat", 404);
+    if (owned.userId !== userId) throw new PushRejected("unknown chat", 404);
     const binding = this.deps.chat.getConversationBinding(chatId);
     if (binding === undefined || binding.location !== "local") {
       throw new PushRejected("chat is not bound to a local workspace", 400);
@@ -161,6 +169,7 @@ export class PushService {
           this.setPushState(chatId, { state: "done", cloudEnvId: cloudEnv.envId });
           this.deps.emit("sys.resync", `chat:${chatId}`, { reason: "push_complete" });
           this.deps.notify?.runDone(pushRunId, "workspace pushed to cloud");
+          this.deps.audit?.record({ userId, action: "chat.push", target: chatId, meta: { pushRunId, cloudEnvId: cloudEnv.envId } });
         } else {
           // Keep the chat local; the tar blob stays for a retry.
           const failureReason = outcome.status === "failed" ? outcome.error : outcome.status;
@@ -174,6 +183,13 @@ export class PushService {
       }
     } catch (err) {
       this.setPushState(chatId, { state: "failed", error: err instanceof Error ? err.message : String(err) });
+      this.deps.audit?.record({
+        userId,
+        action: "chat.push",
+        target: chatId,
+        outcome: "error",
+        meta: { error: err instanceof Error ? err.message : String(err) },
+      });
       throw err;
     }
   }

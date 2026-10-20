@@ -27,6 +27,13 @@ export interface AppConfig {
   /** Sandbox image the Docker driver launches (OT variants). */
   readonly sandboxImage: string;
   /**
+   * OCI runtime for sandbox containers (P5 gVisor opt-in): "runc" (kernel
+   * default) or "runsc" (gVisor — needs runsc installed in the daemon; the
+   * driver passes it verbatim as HostConfig.Runtime and fails visibly if the
+   * daemon doesn't have it). FOUNDRY_SANDBOX_RUNTIME.
+   */
+  readonly sandboxRuntime: string;
+  /**
    * Non-LLM egress control for sandbox containers (ADR-005): "allowlist"
    * installs OT's DNS-whitelist firewall (needs a Linux kernel with ipset —
    * Docker Desktop's VM lacks it and OT refuses to start there), "open" leaves
@@ -64,6 +71,14 @@ export interface AppConfig {
    * FOUNDRY_ADMIN_PASSWORD is unset, boot generates one and writes
    * admin_credentials.txt under the data dir. Ignored once credentials exist. */
   readonly adminPassword: string | undefined;
+  /** P5: WS chat.send rate limit per user (token bucket, per minute). Default 60. */
+  readonly rateChatPerMin: number;
+  /** P5: OpenAI REST plane rate limit per authed identity, per minute. Default 600. */
+  readonly rateApiPerMin: number;
+  /** P5: per-user concurrent runs (queued/running/waiting_approval). Default 8. */
+  readonly maxConcurrentRuns: number;
+  /** P5: minutes between automatic backups; 0 disables. Default 1440 (daily). */
+  readonly backupMin: number;
 }
 
 export class ConfigValidationError extends Error {}
@@ -74,6 +89,17 @@ function intEnv(env: NodeJS.ProcessEnv, name: string, def: number): number {
   const n = Number(raw);
   if (!Number.isInteger(n) || n <= 0) {
     throw new ConfigValidationError(`${name} must be a positive integer, got "${raw}"`);
+  }
+  return n;
+}
+
+/** Non-negative integer (0 allowed — knobs where 0 explicitly means "off"). */
+function intEnv0(env: NodeJS.ProcessEnv, name: string, def: number): number {
+  const raw = env[name];
+  if (raw === undefined || raw === "") return def;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new ConfigValidationError(`${name} must be a non-negative integer, got "${raw}"`);
   }
   return n;
 }
@@ -114,7 +140,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     webDir: env["FOUNDRY_WEB_DIR"]?.trim() || undefined,
     adminUser: env["FOUNDRY_ADMIN_USER"]?.trim() || "admin",
     adminPassword: env["FOUNDRY_ADMIN_PASSWORD"]?.trim() || undefined,
+    rateChatPerMin: intEnv(env, "FOUNDRY_RATE_CHAT_PER_MIN", 60),
+    rateApiPerMin: intEnv(env, "FOUNDRY_RATE_API_PER_MIN", 600),
+    maxConcurrentRuns: intEnv(env, "FOUNDRY_MAX_CONCURRENT_RUNS", 8),
+    backupMin: intEnv0(env, "FOUNDRY_BACKUP_MIN", 1440),
     sandboxImage: env["FOUNDRY_SANDBOX_IMAGE"]?.trim() || "ghcr.io/open-webui/open-terminal:slim",
+    sandboxRuntime: env["FOUNDRY_SANDBOX_RUNTIME"]?.trim() || "runc",
     sandboxEgress: env["FOUNDRY_SANDBOX_EGRESS"]?.trim() === "open" ? "open" : "allowlist",
     egressBaseUrl: env["FOUNDRY_EGRESS_BASE_URL"]?.trim() || `http://host.docker.internal:${port}/v1/egress`,
   };

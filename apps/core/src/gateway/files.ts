@@ -14,8 +14,12 @@ export class FilesService {
 
   private async envFor(userId: string, envId?: string): Promise<EnvHandle> {
     if (envId === undefined) return this.deps.sandbox.ensureEnv(userId);
-    const row = this.deps.sandbox.getEnvRow(envId);
-    if (row === undefined) throw new SandboxError(`unknown sandbox env: ${envId}`, 404);
+    // Multi-user audit (P5): explicit envs must belong to the caller. Both
+    // errors are 404 so foreign ids and unknown ids are indistinguishable.
+    const owner = this.deps.sandbox.envOwner(envId);
+    if (owner === undefined || owner !== userId) {
+      throw new SandboxError(`unknown sandbox env: ${envId}`, 404);
+    }
     return this.deps.sandbox.getEnvMust(envId);
   }
 

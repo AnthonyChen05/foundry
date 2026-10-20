@@ -535,6 +535,16 @@ export class ChatService {
     return rows.length > 0;
   }
 
+  /** P5 concurrent-run quota: the user's non-terminal runs (queued included). */
+  activeRunCount(userId: string): number {
+    const rows = this.dbx.db
+      .select({ status: runs.status })
+      .from(runs)
+      .where(and(eq(runs.userId, userId), inArray(runs.status, ["queued", "running", "waiting_approval"] as RunStatusValue[])))
+      .all();
+    return rows.length;
+  }
+
   listConversations(userId: string) {
     return this.dbx.db
       .select()

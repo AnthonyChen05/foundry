@@ -93,6 +93,12 @@ hooks        (id PK, user_id, name, secret_vault_id?,  -- HMAC signing secret is
               -- vault-ENCRYPTED (verification needs the secret itself, unlike
               -- key verifiers); operator sees plaintext exactly once at create
               target 'schedule'|'chat', model?, created_at)   -- P3 webhook triggers
+
+audit        (id INTEGER PK AUTOINC, user_id?, at,     -- append-only (P5,
+              -- ADR-017); INDEX (at). meta JSON redaction = run_events
+              -- (no keys/tokens/secrets); record failures are swallowed
+              action, target?, outcome 'ok'|'denied'|'timeout'|'error',
+              meta JSON?)
 ```
 
 Rules:
@@ -104,3 +110,5 @@ Rules:
 - Snapshots at run end: tar+zstd of workspace → `blobs`; keep last 20 per
   workspace (config in `settings`).
 - Migrations: additive only. Never rewrite history of existing columns.
+- `audit` is append-only (P5, ADR-017): no UPDATE/DELETE paths exist; the
+  periodic backup job (same ADR) is its archive.

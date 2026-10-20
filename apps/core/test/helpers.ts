@@ -50,6 +50,8 @@ export async function startServer(overrides?: Partial<AppConfig>): Promise<TestC
     logLevel: "warn",
     // Unit tests must never touch Docker even when the local daemon runs.
     sandboxDriver: "fake",
+    // Nor exercise the backup job (spec/backup.spec.ts covers it directly).
+    backupMin: 0,
     // Deterministic owner credentials (ADR-006 bootstrap) for every test boot.
     adminPassword: TEST_ADMIN_PASSWORD,
     ...overrides,

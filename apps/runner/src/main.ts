@@ -13,6 +13,7 @@ import { login } from "./client.js";
  *
  *   node main.js --server <url> --user <name> --password <pw>
  *                [--workspace-root <dir>] [--image <img>] [--name desktop]
+ *                [--runtime runc]
  *
  * Becomes the core's "local" sandbox: logs in (username + password), connects
  * as clientKind "executor", registers (exec.register — reports Docker
@@ -34,6 +35,8 @@ interface Args {
   name: string;
   workspaceRoot: string;
   image: string;
+  /** Opt-in OCI runtime for locally hosted envs (P5; `runc` = daemon default). */
+  runtime: string;
 }
 
 function parseArgs(argv: string[]): Args | undefined {
@@ -52,6 +55,7 @@ function parseArgs(argv: string[]): Args | undefined {
     name: get("--name") ?? "desktop",
     workspaceRoot: (get("--workspace-root") ?? join(homedir(), ".foundry", "workspaces")).replace(/\\/g, "/"),
     image: get("--image") ?? "ghcr.io/open-webui/open-terminal:slim",
+    runtime: get("--runtime") ?? "runc",
   };
 }
 
@@ -68,7 +72,7 @@ function errText(err: unknown): string {
  * Returns "stop" (asked to stop) or "auth" (session rejected — re-login).
  */
 async function runOnce(args: Args, stop: { requested: boolean }): Promise<"stop" | "auth"> {
-  const driver = await makeOtDriver(args.image);
+  const driver = await makeOtDriver(args.image, args.runtime);
   const swept = await sweepRunnerContainers(new Dockerode(), log).catch(() => -1);
   if (swept >= 0) log(`boot sweep: ${swept} orphan container(s) reclaimed`);
 

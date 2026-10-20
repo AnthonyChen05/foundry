@@ -108,9 +108,37 @@ gate, and open a terminal session.
 
 ## P5 — Hardening
 
-Multi-user-ready audit (every query filters user_id), quotas, rate limits,
-backup job (sqlite `.backup` + blobs rsync), audit log, gVisor profile for
-DockerDriver (opt-in), load test (10 concurrent streams), docs + LICENSE (MIT).
+Tasks:
+1. Multi-user audit: every run/env/chat resolution filters by owner —
+   `run.get`/`events`/`cancel`/`approve` assert ownership, term/files reject
+   foreign (or unknown) `envId` 404, chat pushes verify the chat before
+   pulling (all 404s indistinguishable).
+2. Limits: per-user token bucket on `chat.send` + per-identity bucket on the
+   completions REST plane (429 envelope); per-user concurrent-run quota
+   (stateless count of in-flight rows); both deny BEFORE persistence.
+3. Audit log: append-only `audit` table (migration 0008), fire-and-forget
+   recording with run_events redaction discipline, `GET /v1/admin/audit`.
+   Instrumented: auth.login ok/denied, auth.password, gate.resolve,
+   executor.register, all admin mutations, chat.push/denied sends, admin.backup.
+4. Backup job: online sqlite `.backup()` snapshot + incremental
+   content-addressed blob copy, keep 7, dir-stamped (ms precision);
+   `FOUNDRY_BACKUP_MIN` periodic (boot-time first run) + `POST
+   /v1/admin/backup` + `GET /v1/admin/backups` (409 while busy).
+5. Opt-in gVisor: `FOUNDRY_SANDBOX_RUNTIME` / runner `--runtime` →
+   `DockerLauncher.runtimeField` → `HostConfig.Runtime` on every container
+   each process launches (byte-shape unchanged when unset).
+6. Load test: 10 concurrent SSE completions streams (unit-level, dummy).
+
+Acceptance:
+- All P5 specs green: limits.spec.ts (buckets/quotas), backup.spec.ts
+  (snapshot validity, incremental skip, rotation, re-entry, FOUNDRY_BACKUP_MIN=0),
+  hardening.spec.ts (rate/quota deny before persistence, REST 429, audits,
+  foreign access → 404, runtime field, config knobs), load.spec.ts
+  (10 concurrent streams complete intact, faster than serial).
+- `pnpm test` + `pnpm lint` + typechecks green; `pnpm smoke` stays green;
+  existing suite unaffected by the new ownership asserts.
+- ADR-016/017/018 recorded; protocol/data-model/architecture updated
+  (audit table, admin routes, capacity semantics).
 
 ---
 

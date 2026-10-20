@@ -30,6 +30,9 @@ import { registerWeb, resolveWebDir } from "./gateway/web.js";
 import { ExecutorRegistry } from "./executor/registry.js";
 import { LocalExecutorDriver } from "./executor/local_driver.js";
 import { PushService } from "./executor/push.js";
+import { AuditService } from "./audit/audit.js";
+import { BackupService } from "./backup/backup.js";
+import { ConcurrentRunQuota, RateLimiter, type Limits } from "./gateway/limits.js";
 
 /**
  * Wire-up shared by `main.ts`, tests, and the smoke script: services, routes,
@@ -63,6 +66,10 @@ export interface FoundryRuntime {
   files: FilesService;
   /** Executor plane (ADR-015) — the desktop runner's per-user registry. */
   executor: ExecutorRegistry;
+  /** P5: append-only audit log + limits + the backup job. */
+  audit: AuditService;
+  backup: BackupService;
+  limits: Limits;
   app: FastifyInstance;
   /** Stop background work (sandbox reaper, MCP transports) on shutdown. */
   shutdownServices(): Promise<void>;
@@ -79,7 +86,10 @@ export async function buildRuntime(deps: {
   const { config, version, db, vault } = deps;
   const logger = deps.log;
   const logLog = (obj: object, msg: string): void => logger?.info(obj, msg);
-  const auth = new AuthService(db);
+  // Audit needs the db only — construct first so every service built below
+  // can record (auth login/password, gates, push, admin mutations via REST).
+  const auditRef = new AuditService(db);
+  const auth = new AuthService(db, auditRef);
   const providers = new ProviderStore(db, vault);
   const chat = new ChatService(db, providers);
   const emit: EmitFn = (event, channel, payload) => hub.publish(event, channel, payload);
@@ -94,6 +104,15 @@ export async function buildRuntime(deps: {
   executorRegistry.onExecutorStatus = (info) => {
     hub.publish("executor.status", "sys", info);
   };
+  // P5 hardening: rate limits, per-user concurrency quota, backups (audit is
+  // built above). Buckets are in-process (ADR-007 single-writer); the quota
+  // counts the runs table so a restart holds; limits accept no-limits tests.
+  const limits: Limits = {
+    api: new RateLimiter(config.rateApiPerMin),
+    chat: new RateLimiter(config.rateChatPerMin),
+    runs: new ConcurrentRunQuota((userId) => chat.activeRunCount(userId), config.maxConcurrentRuns),
+  };
+  const backup = new BackupService(db, config, { info: (o, m) => logLog(o, m), warn: (o, m) => logger?.warn(o, m) });
   const executorDriver = new LocalExecutorDriver({
     registry: executorRegistry,
     userFor: (envId) => {
@@ -117,7 +136,7 @@ export async function buildRuntime(deps: {
   const notify = new NotifyService({ config, emit, log: logLog });
   const memory = new MemoryService({ dbx: db, providers, log: logLog });
   const agentsRef: { runner?: AgentRunner } = {}; // late-bound (built below)
-  const gates = new GateService({ dbx: db, chat, config, emit, notify, log: logLog }, {
+  const gates = new GateService({ dbx: db, chat, config, emit, notify, audit: auditRef, log: logLog }, {
     // A gate resolved but no loop is parked on it in this process (approve
     // raced the boot-resume). Wake the run via the normal resume path.
     onGateResolvedExternal: (runId) => {
@@ -152,9 +171,9 @@ export async function buildRuntime(deps: {
 
   const scheduler = new SchedulerService({ dbx: db, chat, providers, agents, config, emit, notify, log: logLog });
   const hooks = new HookService({ dbx: db, vault, chat, providers, agents, emit, notify, log: logLog });
-  const push = new PushService({ config, dbx: db, chat, sandbox, blobs, registry: executorRegistry, agents, notify, emit, log: logLog });
+  const push = new PushService({ config, dbx: db, chat, sandbox, blobs, registry: executorRegistry, agents, notify, audit: auditRef, emit, log: logLog });
 
-  hub.wireServices({ agents, gates });
+  hub.wireServices({ agents, gates, audit: auditRef, limits });
   registerRest(app, {
     chat,
     providers,
@@ -165,6 +184,9 @@ export async function buildRuntime(deps: {
     schedules: scheduler,
     hooks,
     push,
+    audit: auditRef,
+    apiLimiter: limits.api,
+    backup,
     onMcpServersChanged: () => void mcp.reload().catch((err) => logLog({ err: String(err) }, "mcp reload after admin PUT failed")),
   });
   // Egress plane (ADR-005): sandbox containers' only route back in.
@@ -184,6 +206,7 @@ export async function buildRuntime(deps: {
   hub.wireServices({ agents, gates, term, files, executor: { registry: executorRegistry, driver: executorDriver } });
   sandbox.startReaper();
   scheduler.start();
+  backup.start(config.backupMin);
 
   // Boot resume (ADR-003): runs left status=running by a restart — plain chat
   // runs are marked failed; agent runs re-enter the loop. Fire-and-forget:
@@ -203,6 +226,7 @@ export async function buildRuntime(deps: {
   const shutdownServices = async (): Promise<void> => {
     sandbox.stopReaper();
     scheduler.stop();
+    backup.stop();
     await mcp.close();
   };
 
@@ -226,6 +250,9 @@ export async function buildRuntime(deps: {
     term,
     files,
     executor: executorRegistry,
+    audit: auditRef,
+    backup,
+    limits,
     app,
     shutdownServices,
   };

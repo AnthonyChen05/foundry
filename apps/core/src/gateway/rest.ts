@@ -22,6 +22,9 @@ import type { PushService } from "../executor/push.js";
 import { McpServerSchema, type McpServer } from "../agent/mcp.js";
 import type { SchedulerService } from "../agent/schedules.js";
 import type { HookService } from "./hooks.js";
+import type { AuditService } from "../audit/audit.js";
+import type { BackupService } from "../backup/backup.js";
+import type { RateLimiter } from "./limits.js";
 import { isSpaPath } from "./web.js";
 
 /**
@@ -66,6 +69,11 @@ export interface RestDeps {
   hooks?: HookService;
   /** ADR-015 push-to-cloud (undefined → the route reports down). */
   push?: PushService;
+  /** P5 audit + limits + backups (optional — unit tests may omit). */
+  audit?: AuditService;
+  /** REST-plane rate limit per authed identity (chat/completions + models). */
+  apiLimiter?: RateLimiter;
+  backup?: BackupService;
 }
 
 export function registerRest(app: FastifyInstance, deps: RestDeps): void {
@@ -212,6 +220,11 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
   app.post("/v1/chat/completions", async (request, reply) => {
     const user = (request as AuthedRequest).user;
     if (!user) return; // unreachable (auth hook), satisfies strict types
+    // P5: per-identity rate limit before any provider work.
+    if (deps.apiLimiter !== undefined && !deps.apiLimiter.take(user.userId)) {
+      await reply.code(429).send(openAiError(429, "rate limit exceeded", "api_error"));
+      return;
+    }
     const body = (request.body ?? {}) as Record<string, unknown>;
     const wireModel = typeof body["model"] === "string" ? body["model"] : undefined;
     const rawMessages = body["messages"];
@@ -396,6 +409,11 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
     // when the response is sent — awaiting it here (without .send) deadlocks
     // the handler forever. Set the status, then return the body to be sent.
     reply.code(created ? 201 : 200);
+    deps.audit?.record({
+      action: "admin.providers.upsert",
+      target: providerId,
+      meta: { created, models: effectiveIds, hasNewKey: body.apiKey !== undefined },
+    });
     return { id: providerId, models: effectiveIds };
   });
 
@@ -419,6 +437,7 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
       await reply.code(404).send(openAiError(404, `unknown provider: ${id}`, "invalid_request_error"));
       return;
     }
+    deps.audit?.record({ action: "admin.providers.delete", target: id });
     return { ok: true };
   });
 
@@ -429,6 +448,7 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
     if (!user) return;
     const body = (request.body ?? {}) as { name?: string };
     const issued: IssuedKey = deps.auth.mintKey(user.userId, typeof body.name === "string" && body.name.trim().length > 0 ? body.name.trim() : "unnamed");
+    deps.audit?.record({ action: "admin.keys.create", target: issued.id, meta: { name: issued.name } });
     // Plaintext appears exactly once — never stored, never echoed again.
     return { id: issued.id, name: issued.name, key: issued.plaintext };
   });
@@ -448,6 +468,7 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
       await reply.code(404).send(openAiError(404, `unknown or already-revoked key: ${id}`, "invalid_request_error"));
       return;
     }
+    deps.audit?.record({ userId: user.userId, action: "admin.keys.delete", target: id });
     return { ok: true };
   });
 
@@ -482,6 +503,7 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
       return;
     }
     deps.mcp.setServers(valid);
+    deps.audit?.record({ action: "admin.mcp.replace", meta: { count: valid.length, names: valid.map((s) => s.name) } });
     deps.onMcpServersChanged?.();
     // Reconnect synchronously so the response reflects the new state.
     void deps.mcp.reload();
@@ -567,6 +589,7 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
         ...(p.enabled !== undefined ? { enabled: p.enabled } : {}),
       });
       reply.code(201);
+      deps.audit?.record({ userId: user.userId, action: "admin.schedules.create", target: String((made as { id?: string }).id ?? ""), meta: { kind: p.kind, spec: p.spec } });
       return made;
     } catch (err) {
       await reply.code(400).send(openAiError(400, err instanceof Error ? err.message : "invalid schedule spec", "invalid_request_error"));
@@ -602,6 +625,7 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
         await reply.code(404).send(openAiError(404, `unknown schedule: ${id}`, "not_found_error"));
         return;
       }
+      deps.audit?.record({ userId: user.userId, action: "admin.schedules.update", target: id, meta: { fields: Object.keys(body as Record<string, unknown>) } });
       return updated;
     } catch (err) {
       await reply.code(400).send(openAiError(400, err instanceof Error ? err.message : "invalid schedule spec", "invalid_request_error"));
@@ -622,6 +646,7 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
       await reply.code(404).send(openAiError(404, `unknown schedule: ${id}`, "not_found_error"));
       return;
     }
+    deps.audit?.record({ userId: user.userId, action: "admin.schedules.delete", target: id });
     return { ok: true };
   });
 
@@ -648,6 +673,7 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
     const p = body as HookCreateParams;
     const made = deps.hooks.create(user.userId, p.name, p.model ?? null);
     // `secret` appears exactly once — never stored in plaintext, never echoed.
+    deps.audit?.record({ userId: user.userId, action: "admin.hooks.create", target: made.hook.id, meta: { name: p.name } });
     reply.code(201);
     return made;
   });
@@ -665,7 +691,41 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
       await reply.code(404).send(openAiError(404, `unknown hook: ${id}`, "not_found_error"));
       return;
     }
+    deps.audit?.record({ userId: user.userId, action: "admin.hooks.delete", target: id });
     return { ok: true };
+  });
+
+  // -- P5: audit log + backups (admin read/trigger) -----------------------------
+
+  app.get("/v1/admin/audit", async (request) => {
+    if (!deps.audit) return { events: [] };
+    const q = request.query as { limit?: string };
+    const limit = typeof q.limit === "string" ? Number(q.limit) : undefined;
+    return { events: deps.audit.list(Number.isFinite(limit) ? limit : undefined) };
+  });
+
+  app.post("/v1/admin/backup", async (request, reply) => {
+    if (!deps.backup) {
+      await reply.code(503).send(openAiError(503, "backup service unavailable", "api_error"));
+      return;
+    }
+    const user = (request as AuthedRequest).user;
+    try {
+      const result = await deps.backup.runOnce();
+      deps.audit?.record({ ...(user !== undefined ? { userId: user.userId } : {}), action: "admin.backup", target: result.dir, meta: { dbBytes: result.dbBytes, blobFiles: result.blobFiles } });
+      return result;
+    } catch (err) {
+      // A busy slot is not a server fault — 409 tells the caller to retry.
+      if (err instanceof Error && err.message === "backup already running") {
+        await reply.code(409).send(openAiError(409, "a backup is already running", "api_error"));
+        return;
+      }
+      await reply.code(500).send(openAiError(500, err instanceof Error ? err.message : "backup failed", "api_error"));
+    }
+  });
+
+  app.get("/v1/admin/backups", async () => {
+    return { backups: deps.backup?.list() ?? [] };
   });
 }
 

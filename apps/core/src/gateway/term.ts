@@ -40,13 +40,15 @@ export class TermService {
   constructor(private readonly deps: TermDeps) {}
 
   /**
-   * Resolve the target env: explicit envId must exist (single-user: any env
-   * row qualifies), otherwise the user's default env.
+   * Resolve the target env: explicit envId must exist AND belong to the
+   * caller (multi-user audit, P5) — otherwise the user's default env.
    */
   private async envFor(userId: string, envId?: string): Promise<EnvHandle> {
     if (envId === undefined) return this.deps.sandbox.ensureEnv(userId);
-    const row = this.deps.sandbox.getEnvRow(envId);
-    if (row === undefined) throw new SandboxError(`unknown sandbox env: ${envId}`, 404);
+    const owner = this.deps.sandbox.envOwner(envId);
+    if (owner === undefined || owner !== userId) {
+      throw new SandboxError(`unknown sandbox env: ${envId}`, 404);
+    }
     return this.deps.sandbox.getEnvMust(envId);
   }
 

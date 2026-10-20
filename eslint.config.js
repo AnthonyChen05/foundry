@@ -8,6 +8,10 @@ export default tseslint.config(
       "**/node_modules/**",
       "**/drizzle/**",
       "packages/protocol/schema/**",
+      // P4 Android build outputs (generated HTML unit-test reports).
+      "apps/android/app/build/**",
+      // Scratch probe scripts for the manual smoke stack (gitignored).
+      "tmp-smoke/**",
       // P4 web app build outputs (generated) — eslint has no .svelte parser.
       "apps/web/.svelte-kit/**",
       "apps/web/build/**",

@@ -379,6 +379,27 @@ export const hooks = sqliteTable(
   (t) => [index("hooks_user_idx").on(t.userId)],
 );
 
+// P5 audit log (append-only): security-relevant actions across all planes.
+// userId may be null for system/boot events; never read by non-admin clients.
+export const audit = sqliteTable(
+  "audit",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: text("user_id"),
+    /** unix epoch ms (repo convention). */
+    at: integer("at").notNull(),
+    /** dotted action: "auth.login", "gate.resolve", "admin.keys.create", … */
+    action: text("action").notNull(),
+    /** Subject of the action (chat/run/key/hook/provider/… id). */
+    target: text("target"),
+    /** "ok" | "denied" | "timeout" | "error" */
+    outcome: text("outcome").notNull(),
+    /** Small structured details; no secrets (same redaction discipline as run_events). */
+    meta: text("meta", { mode: "json" }).$type<Record<string, unknown> | null>(),
+  },
+  (t) => [index("audit_at_idx").on(t.at)],
+);
+
 /** All table names — used by tests to assert the DB is complete. */
 export const ALL_TABLES = [
   "users",
@@ -402,4 +423,5 @@ export const ALL_TABLES = [
   "usage",
   "settings",
   "hooks",
+  "audit",
 ] as const;

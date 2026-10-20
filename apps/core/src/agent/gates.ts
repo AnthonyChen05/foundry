@@ -6,6 +6,7 @@ import type { AppConfig } from "../config.js";
 import type { EmitFn } from "../gateway/chat.js";
 import type { ChatService } from "../gateway/chat.js";
 import type { NotifyService } from "../gateway/notify.js";
+import type { AuditService } from "../audit/audit.js";
 import { toIso } from "../gateway/chat.js";
 import type { ToolPolicyValue } from "./tools.js";
 import { ulid } from "../util/ulid.js";
@@ -78,6 +79,8 @@ export class GateService {
       config: AppConfig;
       emit: EmitFn;
       notify?: NotifyService;
+      /** P5 audit log (optional). */
+      audit?: AuditService;
       log?: (obj: object, msg: string) => void;
     },
     opts?: { onGateResolvedExternal?: (runId: string) => void },
@@ -323,6 +326,13 @@ export class GateService {
       .set({ state, resolvedBy: opts.by, resolvedAt: Date.now() })
       .where(eq(gatesTable.id, opts.gateId))
       .run();
+
+    this.deps.audit?.record({
+      userId: run.userId,
+      action: "gate.resolve",
+      target: opts.gateId,
+      meta: { runId: opts.runId, tool: row.tool, approved: opts.approve, scope: opts.scope ?? "once" },
+    });
 
     if (opts.approve) {
       const chatId = run.conversationId;

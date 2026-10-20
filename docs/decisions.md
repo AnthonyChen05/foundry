@@ -153,3 +153,52 @@ an agent run (trigger "manual" = operator-initiated) in the same conversation, p
 with the shell command history recorded in run_events, is instructed to inspect the
 workspace, reinstall what is missing and verify; on done the binding flips to `"cloud"`
 and `sys.resync` tells clients to refetch. Failures/cancel keep the chat local.
+
+## ADR-016 — Limits are in-process metering; the run quota counts the table
+Accepted 2026-10-20 (P5). Rate limits are token buckets per authed identity,
+enforced at the two expensive boundaries only: WS `chat.send` (per user,
+`FOUNDRY_RATE_CHAT_PER_MIN`) and the OpenAI REST plane (per identity,
+`FOUNDRY_RATE_API_PER_MIN` → 429 in the OpenAI envelope). No distributed
+metering exists to run — the backend is deliberately single-process (ADR-007)
+— so buckets live in memory and reset on restart, which is honest for a
+self-hosted gateway. Concurrent runs per user (`FOUNDRY_MAX_CONCURRENT_RUNS`)
+are checked STATELESSLY against the runs table (`queued/running/
+waiting_approval`) right before run creation: no reservation/release
+bookkeeping to leak, and the quota self-heals after crashes because the
+count is derived, not stored. Both rejections use code `capacity` (WS
+`res` error / 429+OpenAI envelope on REST) so every client type gets its
+native error shape; denial reasons (`rate`/`concurrency`) are audited, and
+denials happen BEFORE any message persistence so a rejected send leaves no
+half-created state behind.
+
+## ADR-017 — Audit log is append-only fire-and-forget; backups are snapshot + content-addressed rsync
+Accepted 2026-10-20 (P5). Security-relevant actions across all planes — auth
+(attempts ok/denied, password changes), gate resolutions, admin mutations
+(providers/keys/schedules/hooks/MCP), executor registration, chat pushes,
+manual backups — append to the `audit` table (migration 0008) with `at`,
+`user_id`, `action`, `target`, `outcome`, `meta`. Recording is fire-and-forget
+from the callers' perspective: any write failure is swallowed (logged), never
+propagated — an audit outage must not take the action it observes down with
+it. The log is exposed read-only at `GET /v1/admin/audit` (newest first).
+Redaction discipline matches `run_events`: no keys, tokens, or secrets in
+`meta` — plaintext credentials appear exactly once, at creation, to the
+operator. Backups: `POST /v1/admin/backup` (or the `FOUNDRY_BACKUP_MIN`
+periodic job, boot-time first run included) writes `<dataDir>/backups/<ts>/`
+with (1) an online sqlite `.backup()` snapshot — safe to run while serving
+writes, and (2) an incremental copy of the content-addressed blob store: a
+blob's filename is its sha256, so "rsync" degenerates to copying what the
+previous backup's `manifest.json` does not already contain; keep last 7
+(`runOnce(keep)`). A busy slot answers 409, not 500.
+
+## ADR-018 — Alternate OCI runtime is a per-process opt-in (FOUNDRY_SANDBOX_RUNTIME)
+Accepted 2026-10-20 (P5). gVisor (`runsc`) hardening for sandbox containers
+is opt-in, expressed as the daemon runtime name: `FOUNDRY_SANDBOX_RUNTIME`
+(core) / `--runtime` (the desktop runner) set Docker's `HostConfig.Runtime`
+on every container the process launches (an empty value or `runc` keeps the
+request byte-shape identical to before, so tests and installs that don't opt
+in see zero diff). The knob is per-PROCESS, not global: core only controls
+the containers IT launches, the runner only its own local envs — a hardened
+install that wants gVisor everywhere sets it for both. The daemon must have
+the runtime installed; with `runsc` absent from Docker Desktop, containers
+fail to START (fail closed — a misconfigured hardening knob degrades to an
+error, never to silently running runc).

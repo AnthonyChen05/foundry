@@ -54,7 +54,7 @@ comes free: per-channel `seq` cursors on events, ring-buffer replay on
 reconnect, `sys.resync` when a client falls outside the buffer, and refetch
 methods (`chat.history`, `run.events`) as the convergence path.
 
-## Quickstart (P4 state)
+## Quickstart (P5 state)
 
 Status: P4 first client on top of P3 autonomy — provider adapters (`dummy`
 scripted, `openai_compat`, `anthropic` shim), OpenAI-compatible REST with SSE
@@ -80,7 +80,14 @@ sandbox** on your own machine — an Open Terminal container on your Docker
 Desktop, driven by `@foundry/runner` over WS — and **push to cloud** when a
 local chat should move: the runner's workspace is tared into the backend env
 and a reconcile run reconstructs the dependencies you installed along the way
-(the LLM reads the chat's shell history and reinstalls them).
+(the LLM reads the chat's shell history and reinstalls them). **P5 hardening**
+rides the same process: per-user ownership on every run/env/chat resolution
+(foreign ids 404 like unknown ones), per-user rate limit + concurrent-run
+quota on `chat.send` (429/`capacity`, denied before persistence), a metered
+completions plane, an append-only audit log (`GET /v1/admin/audit`), a
+backup job (daily by default, `POST /v1/admin/backup` manual) and an opt-in
+gVisor runtime (`FOUNDRY_SANDBOX_RUNTIME`) — see `docs/decisions.md`
+ADR-016/017/018.
 
 ```sh
 pnpm install                       # first time
@@ -201,3 +208,9 @@ Notes:
   cwd — start core from the repo root unless you want `apps/core/data`.
 - Node: the stack pins Node 22 LTS; this machine currently runs Node 25.8.1
   (tests + boot verified on it).
+- P5 knobs (all optional): `FOUNDRY_RATE_CHAT_PER_MIN` (60) /
+  `FOUNDRY_RATE_API_PER_MIN` (600) / `FOUNDRY_MAX_CONCURRENT_RUNS` (8) —
+  metering: `capacity` errors or 429s; `FOUNDRY_BACKUP_MIN` (1440, 0 = off) —
+  backups land in `<FOUNDRY_DATA_DIR>/backups/` (keep 7);
+  `FOUNDRY_SANDBOX_RUNTIME` (e.g. `runsc` for gVisor — daemon must have it;
+  the runner takes `--runtime` the same way).

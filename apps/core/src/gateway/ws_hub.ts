@@ -47,6 +47,8 @@ import type { FoundryDb } from "../db/open.js";
 import { conversations, runs } from "../db/schema.js";
 import type { AuthService } from "../auth/auth.js";
 import { UnknownModelError } from "./chat.js";
+import type { AuditService } from "../audit/audit.js";
+import type { Limits } from "./limits.js";
 import { ProviderError } from "../providers/types.js";
 import { SandboxError } from "../sandbox/types.js";
 import type { ChatService } from "./chat.js";
@@ -129,17 +131,22 @@ export class WsHub {
     files?: FilesService;
     /** Approval gates (P3) — wired after construction (buildRuntime). */
     gates?: GateService;
+    /** P5 audit + limits — wired after construction (buildRuntime). */
+    audit?: AuditService;
+    limits?: Limits;
     /** Executor plane (ADR-015) — wired after construction (buildRuntime). */
     executor?: ExecutorWiring;
   }) {}
 
   /** Late wiring: the hub is built before the services that need its maps. */
-  wireServices(services: { agents?: AgentRunner; term?: TermService; files?: FilesService; gates?: GateService; executor?: ExecutorWiring }): void {
+  wireServices(services: { agents?: AgentRunner; term?: TermService; files?: FilesService; gates?: GateService; executor?: ExecutorWiring; audit?: AuditService; limits?: Limits }): void {
     if (services.agents !== undefined) this.deps.agents = services.agents;
     if (services.term !== undefined) this.deps.term = services.term;
     if (services.files !== undefined) this.deps.files = services.files;
     if (services.gates !== undefined) this.deps.gates = services.gates;
     if (services.executor !== undefined) this.deps.executor = services.executor;
+    if (services.audit !== undefined) this.deps.audit = services.audit;
+    if (services.limits !== undefined) this.deps.limits = services.limits;
   }
 
   // -- event publishing -------------------------------------------------------
@@ -469,6 +476,7 @@ export class WsHub {
       }
       case "run.get": {
         const runId = strParam(params, "runId");
+        this.assertRunOwner(conn.userId, runId);
         const run = this.deps.chat.getRun(runId);
         if (run === undefined) throw errOf("not_found", `unknown run: ${runId}`);
         // Open gates ride along (P3) so a reconnecting client can render its
@@ -478,18 +486,20 @@ export class WsHub {
       }
       case "run.events": {
         const runId = strParam(params, "runId");
+        this.assertRunOwner(conn.userId, runId);
         const since = numParam(params, "since");
-        if (this.deps.chat.getRun(runId) === undefined) throw errOf("not_found", `unknown run: ${runId}`);
         return this.deps.chat.runEvents(runId, since);
       }
       case "run.cancel": {
         const runId = strParam(params, "runId");
+        this.assertRunOwner(conn.userId, runId);
         const run = this.deps.chat.getRun(runId);
         if (run === undefined) throw errOf("not_found", `unknown run: ${runId}`);
         const controller = this.inFlight.get(runId);
         if (controller === undefined) {
           throw errOf("bad_request", `run ${runId} is not running in this process`);
         }
+        this.deps.audit?.record({ userId: conn.userId, action: "run.cancel", target: runId });
         controller.abort();
         return {};
       }
@@ -497,6 +507,8 @@ export class WsHub {
         if (!Value.Check(RunApproveParamsSchema, params)) throw errOf("bad_request", "invalid run.approve params");
         if (this.deps.gates === undefined) throw errOf("internal", "gate service unavailable");
         const p = params as RunApproveParams;
+        // Ownership FIRST: the gate service only knows gates/runs by id.
+        this.assertRunOwner(conn.userId, p.runId);
         const row = this.deps.gates.resolve({
           runId: p.runId,
           gateId: p.gateId,
@@ -584,6 +596,12 @@ export class WsHub {
           ...(p.workspaceRoot !== undefined ? { workspaceRoot: p.workspaceRoot } : {}),
         });
         conn.role = "executor";
+        this.deps.audit?.record({
+          userId: conn.userId,
+          action: "executor.register",
+          target: p.name,
+          meta: { replaced: res.replaced === true, dockerAvailable: p.dockerAvailable },
+        });
         return { ...(res.replaced ? { replaced: true } : {}) };
       }
       case "exec.status": {
@@ -615,6 +633,18 @@ export class WsHub {
 
   private chatSend(conn: HConn, p: ChatSendParams, _idem: string): { runId: string; conversationId: string } {
     const conv = this.assertConversation(conn.userId, p.chatId);
+
+    // P5 limits: rate + concurrency BEFORE any persistence (a rejected send
+    // leaves no user message behind, so retries are clean).
+    const limits = this.deps.limits;
+    if (limits !== undefined && !limits.chat.take(conn.userId)) {
+      this.deps.audit?.record({ userId: conn.userId, action: "chat.send", outcome: "denied", meta: { reason: "rate", chatId: p.chatId } });
+      throw errOf("capacity", "chat rate limit exceeded");
+    }
+    if (limits !== undefined && !limits.runs.tryAcquire(conn.userId)) {
+      this.deps.audit?.record({ userId: conn.userId, action: "chat.send", outcome: "denied", meta: { reason: "concurrency", chatId: p.chatId } });
+      throw errOf("capacity", "concurrent run limit reached");
+    }
 
     // Server-authoritative context: persist the user turn, then load history
     // from the DB — the client sends one message, the server builds the rest.
@@ -717,6 +747,22 @@ export class WsHub {
       .get();
     if (!row) throw errOf("not_found", `unknown conversation: ${chatId}`);
     return { id: row.id, title: row.title, ...(row.model !== null ? { model: row.model } : {}) };
+  }
+
+  /**
+   * P5 multi-user audit: every run.* request resolves its run THROUGH this —
+   * unknown and foreign runs are indistinguishable (404 either way).
+   * Returns nothing; getRun callers re-resolve.
+   */
+  private assertRunOwner(userId: string, runId: string): void {
+    const row = this.deps.dbx.db
+      .select({ userId: runs.userId })
+      .from(runs)
+      .where(eq(runs.id, runId))
+      .get();
+    if (row === undefined || row.userId !== userId) {
+      throw errOf("not_found", `unknown run: ${runId}`);
+    }
   }
 
   private activeRunIds(): string[] {

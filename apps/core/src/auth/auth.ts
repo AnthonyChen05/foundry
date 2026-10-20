@@ -81,7 +81,11 @@ export async function verifyPassword(password: string, stored: string): Promise<
 }
 
 export class AuthService {
-  constructor(private readonly dbx: FoundryDb) {}
+  constructor(
+    private readonly dbx: FoundryDb,
+    /** P5 audit (optional — tests may omit): login/password events. */
+    private readonly audit?: { record: (entry: { userId?: string; action: string; target?: string; outcome?: "ok" | "denied" | "error"; meta?: Record<string, unknown> }) => void },
+  ) {}
 
   /**
    * First-boot bootstrap: create the owner user and one root admin key.
@@ -179,8 +183,15 @@ export class AuthService {
   /** auth.login: username + password → session token. */
   async loginWithPassword(username: string, password: string): Promise<IssuedSession | undefined> {
     const row = this.dbx.db.select().from(users).where(eq(users.username, username)).get();
-    if (!row?.passwordHash) return undefined;
-    if (!(await verifyPassword(password, row.passwordHash))) return undefined;
+    if (!row?.passwordHash) {
+      this.audit?.record({ action: "auth.login", target: username, outcome: "denied" });
+      return undefined;
+    }
+    if (!(await verifyPassword(password, row.passwordHash))) {
+      this.audit?.record({ action: "auth.login", target: username, outcome: "denied" });
+      return undefined;
+    }
+    this.audit?.record({ userId: row.id, action: "auth.login", target: username });
     return this.newSession(row.id);
   }
 
@@ -194,6 +205,7 @@ export class AuthService {
     if (!row) return false;
     if (row.passwordHash !== null && row.passwordHash !== "") {
       if (currentPassword === undefined || !(await verifyPassword(currentPassword, row.passwordHash))) {
+        this.audit?.record({ userId, action: "auth.password", outcome: "denied" });
         return false;
       }
     }
@@ -202,6 +214,7 @@ export class AuthService {
       .set({ passwordHash: await hashPassword(newPassword) })
       .where(eq(users.id, userId))
       .run();
+    this.audit?.record({ userId, action: "auth.password", meta: { initial: row.passwordHash === null } });
     return true;
   }
 
