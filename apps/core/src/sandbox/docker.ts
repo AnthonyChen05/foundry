@@ -46,7 +46,12 @@ export class DockerLauncher {
   }
   readonly docker: Dockerode;
 
-  constructor(private readonly config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime">) {
+  constructor(
+    private readonly config: Pick<
+      AppConfig,
+      "sandboxImage" | "sandboxRuntime" | "sandboxOtHost"
+    >,
+  ) {
     this.docker = new Dockerode();
   }
 
@@ -114,7 +119,10 @@ export class DockerLauncher {
       },
     });
     await container.start();
-    const ot = new OtClient(`http://127.0.0.1:${hostPort}`, opts.apiKey);
+    // Reach the mapped port via the configured host: 127.0.0.1 when the core
+    // runs on the daemon's host; host.docker.internal when core itself is a
+    // container (the sibling publishes to the HOST's loopback, not ours).
+    const ot = new OtClient(`http://${this.config.sandboxOtHost}:${hostPort}`, opts.apiKey);
     await this.awaitOtReady(container, ot, image);
     return {
       envId: `docker-${container.id}`,
@@ -187,7 +195,7 @@ export class OpenTerminalDriver implements SandboxDriver {
   /** envId → live client + container id (in-memory; DB rows are service-level). */
   private readonly live = new Map<string, { ot: OtClient; containerId: string; workspaceDir: string }>();
 
-  constructor(config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime">) {
+  constructor(config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime" | "sandboxOtHost">) {
     this.launcher = new DockerLauncher(config);
   }
 
@@ -362,10 +370,10 @@ export class OpenTerminalDriver implements SandboxDriver {
 export class DockerDriver implements SandboxDriver {
   readonly name = "docker" as const;
   private readonly launcher: DockerLauncher;
-  private readonly config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime">;
+  private readonly config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime" | "sandboxOtHost">;
   private readonly live = new Map<string, { containerId: string; workspaceDir: string }>();
 
-  constructor(config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime">) {
+  constructor(config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime" | "sandboxOtHost">) {
     this.config = config;
     this.launcher = new DockerLauncher(config);
   }

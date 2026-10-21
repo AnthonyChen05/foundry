@@ -34,6 +34,14 @@ export interface AppConfig {
    */
   readonly sandboxRuntime: string;
   /**
+   * Host the core uses to reach a launched OT container's mapped port
+   * (FOUNDRY_SANDBOX_OT_HOST). Default "127.0.0.1" (core on the host);
+   * a containerized core (compose) uses "host.docker.internal" because the
+   * sibling sandbox publishes its port to the HOST's loopback, which the
+   * core container cannot reach as 127.0.0.1.
+   */
+  readonly sandboxOtHost: string;
+  /**
    * Non-LLM egress control for sandbox containers (ADR-005): "allowlist"
    * installs OT's DNS-whitelist firewall (needs a Linux kernel with ipset —
    * Docker Desktop's VM lacks it and OT refuses to start there), "open" leaves
@@ -146,6 +154,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     backupMin: intEnv0(env, "FOUNDRY_BACKUP_MIN", 1440),
     sandboxImage: env["FOUNDRY_SANDBOX_IMAGE"]?.trim() || "ghcr.io/open-webui/open-terminal:slim",
     sandboxRuntime: env["FOUNDRY_SANDBOX_RUNTIME"]?.trim() || "runc",
+    // Where the core reaches a launched OT container's mapped port. Default
+    // 127.0.0.1 = core on the host. Containerized core (compose): the host
+    // gateway, since the sibling container publishes to the HOST's loopback.
+    sandboxOtHost: env["FOUNDRY_SANDBOX_OT_HOST"]?.trim() || "127.0.0.1",
     sandboxEgress: env["FOUNDRY_SANDBOX_EGRESS"]?.trim() === "open" ? "open" : "allowlist",
     egressBaseUrl: env["FOUNDRY_EGRESS_BASE_URL"]?.trim() || `http://host.docker.internal:${port}/v1/egress`,
   };

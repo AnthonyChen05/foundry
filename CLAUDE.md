@@ -103,6 +103,7 @@ long-term memory, voice.
 4. `docs/data-model.md` — SQLite schema
 5. `docs/decisions.md` — ADRs (the "why")
 6. `docs/build-order.md` — phases, tasks, acceptance criteria ← your TODO list
-7. `docs/prior-art.md` — what to study/borrow, licenses
+7. `docs/setup.md` — operator setup guide (compose/host paths)
+8. `docs/prior-art.md` — what to study/borrow, licenses
 
 If docs conflict with user instruction, user wins — then update the doc.

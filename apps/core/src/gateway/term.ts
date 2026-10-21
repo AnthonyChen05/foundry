@@ -49,7 +49,8 @@ export class TermService {
     if (owner === undefined || owner !== userId) {
       throw new SandboxError(`unknown sandbox env: ${envId}`, 404);
     }
-    return this.deps.sandbox.getEnvMust(envId);
+    // Probe the container (post-restart a "ready" row's map can be empty).
+    return this.deps.sandbox.probeEnv(envId);
   }
 
   async open(userId: string, envId?: string): Promise<{ termId: string; envId: string; replay: string }> {

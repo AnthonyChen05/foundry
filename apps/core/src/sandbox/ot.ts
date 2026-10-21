@@ -145,6 +145,19 @@ export class OtClient {
       const after = await this.http<OtExecStatus>("GET", `/execute/${encodeURIComponent(cur.id)}/status?wait=1&offset=${cur.next_offset}`).catch(() => cur);
       return { ...after, status: "done", exit_code: 137, truncated: true };
     }
+    // Proxy hops (a containerized core reaching the sandbox via the host
+    // gateway / docker-proxy) can deliver the terminal inline response with
+    // the output lines still unflushed. The status endpoint (offset 0)
+    // retrieves whatever landed; commands that truly print nothing pay one
+    // extra request. Bounded so genuine hangs fail on schedule.
+    const collectDeadline = Date.now() + 3000;
+    while (cur.output.length === 0 && Date.now() < collectDeadline) {
+      await new Promise<void>((r) => setTimeout(r, 250));
+      cur = await this.http<OtExecStatus>(
+        "GET",
+        `/execute/${encodeURIComponent(cur.id)}/status?wait=1&offset=0`,
+      ).catch(() => cur);
+    }
     return cur;
   }
 

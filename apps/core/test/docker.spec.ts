@@ -137,7 +137,7 @@ d("Open Terminal sandbox (real container)", () => {
     // window polling a dead endpoint (run-liveness.spec.ts locks the run
     // level; this locks the driver level).
     const image = process.env.FOUNDRY_SANDBOX_IMAGE ?? "ghcr.io/open-webui/open-terminal:latest";
-    const launcher = new DockerLauncher({ sandboxImage: image, sandboxRuntime: "runc" });
+    const launcher = new DockerLauncher({ sandboxImage: image, sandboxRuntime: "runc", sandboxOtHost: "127.0.0.1" });
     await launcher.pullIfMissing(image);
     const container = await launcher.docker.createContainer({ Image: image, Cmd: ["sh", "-c", "exit 1"] });
     const ot = new OtClient("http://127.0.0.1:1", "probe");

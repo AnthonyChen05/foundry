@@ -1,0 +1,77 @@
+# Foundry — self-hosted deployment (docs/setup.md §compose).
+#
+#   mkdir -p /srv/foundry        # the data dir, SAME path on host + container
+#   cp .env.example .env         # set FOUNDRY_MASTER_KEY (required)
+#   docker compose up -d         # core; add --profile push for ntfy
+#
+# The core launches sandbox containers as SIBLINGS on the same daemon (socket
+# mount below). Their workspace bind source is CORE's dataDir path, so the
+# path must be IDENTICAL inside the core container and on the host — hence
+# /srv/foundry on both sides. Linux hosts only: Docker Desktop's bind-source
+# namespace can't do same-path mounts; on Windows/macOS run core on the host
+# (`pnpm dev`) instead. Agent tool execution never runs in this container —
+# only in the sandbox sidecars (guardrail #1); this container only holds the
+# trusted gateway + the daemon socket it needs to drive those sidecars.
+
+services:
+  core:
+    build: .
+    image: foundry-core:local
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      # In a container core must bind ALL interfaces or the published port is
+      # silent (the in-container loopback healthcheck still passes!).
+      FOUNDRY_HOST: 0.0.0.0
+      # The data dir — SAME path on host + container (§1.1 of the guide).
+      FOUNDRY_DATA_DIR: /srv/foundry
+      # Sandboxes publish to the HOST's loopback; the core container reaches
+      # them via the host gateway (127.0.0.1 would hit the core's own netns).
+      FOUNDRY_SANDBOX_OT_HOST: host.docker.internal
+      # Required. Rotating/losing it makes vaulted provider keys unrecoverable.
+      FOUNDRY_MASTER_KEY: ${FOUNDRY_MASTER_KEY:?set FOUNDRY_MASTER_KEY in .env}
+      # First-boot owner credentials (ignored once credentials exist).
+      FOUNDRY_ADMIN_PASSWORD: ${FOUNDRY_ADMIN_PASSWORD:-}
+      # ntfy (optional): fill both, or `docker compose --profile push up -d`.
+      FOUNDRY_NTFY_URL: ${FOUNDRY_NTFY_URL:-}
+      FOUNDRY_NTFY_TOPIC: ${FOUNDRY_NTFY_TOPIC:-}
+      # Allowlist = OT's DNS firewall (Linux: works; Docker Desktop: set open).
+      FOUNDRY_SANDBOX_EGRESS: ${FOUNDRY_SANDBOX_EGRESS:-allowlist}
+      FOUNDRY_LOG_LEVEL: ${FOUNDRY_LOG_LEVEL:-info}
+      # The default sandbox image is the full toolkit (python3 etc.) so the
+      # acceptance scenario runs; switch to :slim for a smaller footprint.
+      FOUNDRY_SANDBOX_IMAGE: ${FOUNDRY_SANDBOX_IMAGE:-ghcr.io/open-webui/open-terminal:latest}
+      # P5 knobs (defaults shown): rate limits, run quota, backup cadence.
+      # FOUNDRY_RATE_CHAT_PER_MIN: "60"
+      # FOUNDRY_RATE_API_PER_MIN: "600"
+      # FOUNDRY_MAX_CONCURRENT_RUNS: "8"
+      # FOUNDRY_BACKUP_MIN: "1440"
+    volumes:
+      # Data dir: db, blobs, workspaces, backups, admin credentials.
+      # SAME path on host + container — see docs/setup.md §1.1.
+      - /srv/foundry:/srv/foundry
+      # The ONLY privileged mount, on the trusted core (ADR-005/trust model):
+      # used to launch + manage the sandbox sidecars.
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      # Lets the core reach host-side services (Ollama on 11434 etc.).
+      - "host.docker.internal:host-gateway"
+    # Healthcheck: inherited from the image (Dockerfile HEALTHCHECK on /healthz).
+
+  # ntfy (optional, `--profile push`): run.done/failed + gate-open pushes to
+  # your phone. Point FOUNDRY_NTFY_URL at http://ntfy:80 and FOUNDRY_NTFY_TOPIC
+  # at any topic name; expose 80 to the host so the phone can subscribe
+  # (Tailscale covers it — do not publish this to the internet).
+  ntfy:
+    image: binwiederhier/ntfy:v2.11.0
+    restart: unless-stopped
+    profiles: ["push"]
+    command: serve
+    ports:
+      - "127.0.0.1:2587:80"
+    volumes:
+      - ntfy-cache:/var/cache/ntfy
+
+volumes:
+  ntfy-cache:

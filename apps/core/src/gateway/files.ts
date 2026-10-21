@@ -20,7 +20,8 @@ export class FilesService {
     if (owner === undefined || owner !== userId) {
       throw new SandboxError(`unknown sandbox env: ${envId}`, 404);
     }
-    return this.deps.sandbox.getEnvMust(envId);
+    // Probe the container (post-restart a "ready" row's map can be empty).
+    return this.deps.sandbox.probeEnv(envId);
   }
 
   private static toEntry(s: FileStat): FileEntry {

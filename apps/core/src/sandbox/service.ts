@@ -1,5 +1,5 @@
 import { randomBytes, createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { and, eq, isNull, lt, or } from "drizzle-orm";
 import type { AppConfig } from "../config.js";
@@ -68,6 +68,25 @@ export class SandboxService {
 
   // -- workspaces -------------------------------------------------------------
 
+  /**
+   * Workspace dirs are bind-mounted into sandbox containers and written by
+   * the OT user (uid 1000) — and by the host user / the core process, whose
+   * uid may differ (compose: the core is root on a host dir that may exist
+   * from an earlier or later install; Docker Desktop's 9p maps everything to
+   * root). They are SHARED dirs by design: world-writable, contents
+   * world-readable. Not applied to the data dir itself (db/keys stay
+   * private to the owner).
+   */
+  private prepareWorkspaceDir(dir: string): void {
+    mkdirSync(dir, { recursive: true });
+    try {
+      chmodSync(dir, 0o777);
+    } catch {
+      // read-only mounts / exotic daemons — the dirs still work when uid
+      // mappings agree (host-run core on its own data dir).
+    }
+  }
+
   /** Get-or-create the primary workspace (one per user in v0). */
   ensureWorkspace(userId: string): { id: string; dir: string } {
     const row =
@@ -77,12 +96,12 @@ export class SandboxService {
         .where(and(eq(workspaces.userId, userId), eq(workspaces.name, DEFAULT_WORKSPACE)))
         .get() ?? undefined;
     if (row !== undefined) {
-      mkdirSync(row.path, { recursive: true });
+      this.prepareWorkspaceDir(row.path);
       return { id: row.id, dir: row.path };
     }
     const id = `ws_${ulid()}`;
     const dir = join(resolve(join(this.config.dataDir, "workspaces")), DEFAULT_WORKSPACE);
-    mkdirSync(dir, { recursive: true });
+    this.prepareWorkspaceDir(dir);
     this.dbx.db.insert(workspaces).values({ id, userId, name: DEFAULT_WORKSPACE, path: dir, createdAt: Date.now() }).run();
     return { id, dir };
   }
@@ -101,12 +120,12 @@ export class SandboxService {
         .where(and(eq(workspaces.userId, userId), eq(workspaces.name, name)))
         .get() ?? undefined;
     if (row !== undefined) {
-      mkdirSync(row.path, { recursive: true });
+      this.prepareWorkspaceDir(row.path);
       return { id: row.id, dir: row.path };
     }
     const id = `ws_${ulid()}`;
     const dir = join(resolve(join(this.config.dataDir, "workspaces", "chats")), chatId);
-    mkdirSync(dir, { recursive: true });
+    this.prepareWorkspaceDir(dir);
     this.dbx.db.insert(workspaces).values({ id, userId, name, path: dir, createdAt: Date.now() }).run();
     return { id, dir };
   }
@@ -168,13 +187,22 @@ export class SandboxService {
   /**
    * Get-or-create the caller's primary env: one container per workspace
    * (architecture.md). `envId` targets an existing env explicitly.
+   *
+   * Post-restart the driver's in-memory map is empty (every status probe
+   * answers "dead" for an unknown id): a ready-row env must be PROBED and
+   * re-created over the same workspace dir (files live on the core's disk,
+   * ADR-003) — otherwise the run parses tools against a handle whose
+   * container can no longer be reached ("driver has no live container").
    */
   async ensureEnv(userId: string, envId?: string): Promise<EnvHandle> {
     if (envId !== undefined) return this.getEnvMust(envId);
     const ws = this.ensureWorkspace(userId);
     if (this.defaultEnvId !== undefined) {
       const row = this.getEnvRow(this.defaultEnvId);
-      if (row !== undefined && row.workspaceId === ws.id) return this.liveHandle(row.id);
+      if (row !== undefined && row.workspaceId === ws.id && (await this.driver.status(row.id)) === "ready") {
+        return this.liveHandle(row.id);
+      }
+      this.defaultEnvId = undefined;
     }
     const row = this.dbx.db
       .select()
@@ -182,8 +210,12 @@ export class SandboxService {
       .where(and(eq(envs.workspaceId, ws.id), eq(envs.status, "ready")))
       .get() ?? undefined;
     if (row !== undefined) {
-      this.defaultEnvId = row.id;
-      return this.liveHandle(row.id);
+      if ((await this.driver.status(row.id)) === "ready") {
+        this.defaultEnvId = row.id;
+        return this.liveHandle(row.id);
+      }
+      this.dbx.db.update(envs).set({ status: "dead" }).where(eq(envs.id, row.id)).run();
+      this.defaultEnvId = undefined;
     }
     return this.createEnv(userId, ws);
   }
@@ -199,6 +231,10 @@ export class SandboxService {
       ANTHROPIC_API_KEY: egressToken,
       OPENAI_BASE_URL: this.config.egressBaseUrl,
       ANTHROPIC_BASE_URL: this.config.egressBaseUrl,
+      // OT's exec-output capture writes per-process jsonl under XDG state;
+      // keep it off shared-fs binds (9p/Docker Desktop) — container tmpfs is
+      // fast + always writable by the sandbox user.
+      XDG_STATE_HOME: "/tmp/ot-state",
     };
     if (this.config.sandboxEgress === "allowlist") {
       // guardrail #3: OT's DNS-whitelist firewall passes ONLY the gateway
@@ -321,6 +357,24 @@ export class SandboxService {
   getEnvMust(envId: string): EnvHandle {
     const row = this.getEnvRow(envId);
     if (row === undefined || row.status === "dead") throw new UnknownEnvError(envId);
+    return this.liveHandle(envId);
+  }
+
+  /**
+   * Probe the container behind a "ready" row (async — the term/files planes'
+   * explicit-env access). A ready row whose container is gone (died, or the
+   * driver map is empty after a restart) is closed out and answered 404:
+   * a caller that NAMED its env gets an error, not a silent re-create.
+   */
+  async probeEnv(envId: string): Promise<EnvHandle> {
+    const row = this.getEnvRow(envId);
+    if (row === undefined || row.status === "dead") throw new UnknownEnvError(envId);
+    const driver = row.driver === "executor" ? this.execDriver() : this.driver;
+    if ((await driver.status(envId)) !== "ready") {
+      this.dbx.db.update(envs).set({ status: "dead" }).where(eq(envs.id, envId)).run();
+      if (this.defaultEnvId === envId) this.defaultEnvId = undefined;
+      throw new UnknownEnvError(envId);
+    }
     return this.liveHandle(envId);
   }
 
@@ -462,6 +516,8 @@ export async function makeOtDriver(
   sandboxImage: string,
   /** P5 hardening: opt-in OCI runtime (FOUNDRY_SANDBOX_RUNTIME / --runtime). */
   sandboxRuntime = "runc",
+  /** Where the runner's OT containers' mapped port lives (default: host loopback). */
+  sandboxOtHost = "127.0.0.1",
 ): Promise<OpenTerminalDriver> {
-  return new OpenTerminalDriver({ sandboxImage, sandboxRuntime });
+  return new OpenTerminalDriver({ sandboxImage, sandboxRuntime, sandboxOtHost });
 }

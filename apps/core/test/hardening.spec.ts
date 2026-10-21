@@ -264,12 +264,14 @@ describe("P5 sandbox runtime + config knobs", () => {
   it("P5 knobs parse; blanks fall back to defaults; negatives and junk rejected", () => {
     const c = loadConfig({
       FOUNDRY_SANDBOX_RUNTIME: " runsc ",
+      FOUNDRY_SANDBOX_OT_HOST: " host.docker.internal ",
       FOUNDRY_RATE_CHAT_PER_MIN: "7",
       FOUNDRY_RATE_API_PER_MIN: "70",
       FOUNDRY_MAX_CONCURRENT_RUNS: "3",
       FOUNDRY_BACKUP_MIN: "0",
     });
     expect(c.sandboxRuntime).toBe("runsc");
+    expect(c.sandboxOtHost).toBe("host.docker.internal");
     expect(c.rateChatPerMin).toBe(7);
     expect(c.rateApiPerMin).toBe(70);
     expect(c.maxConcurrentRuns).toBe(3);
@@ -277,6 +279,7 @@ describe("P5 sandbox runtime + config knobs", () => {
 
     const blank = loadConfig({});
     expect(blank.sandboxRuntime).toBe("runc");
+    expect(blank.sandboxOtHost).toBe("127.0.0.1");
     expect(blank.rateChatPerMin).toBe(60);
     expect(blank.rateApiPerMin).toBe(600);
     expect(blank.maxConcurrentRuns).toBe(8);

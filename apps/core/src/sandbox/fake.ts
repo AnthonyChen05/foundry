@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdirSync, existsSync, statSync, readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import {
@@ -49,7 +50,9 @@ export class FakeDriver implements SandboxDriver {
 
   async create(opts: CreateEnvOpts): Promise<EnvHandle> {
     // Honor a core-minted envId (executor/runner path); legacy mints otherwise.
-    const envId = opts.envId ?? `env_fake_${this.nextId++}`;
+    // The suffix keeps ids collision-free across REBOOTS against a persisted
+    // envs table (the counter restarts with each instance; the DB rows don't).
+    const envId = opts.envId ?? `env_fake_${this.nextId++}_${randomBytes(4).toString("hex")}`;
     mkdirSync(opts.workspaceDir, { recursive: true });
     const env: FakeEnv = {
       id: envId,

@@ -1,0 +1,23 @@
+# Image build context: source + lockfile only — no state, no dev tooling.
+node_modules
+**/node_modules
+**/dist
+**/build
+.git
+.github
+data
+data-dev
+apps/core/data
+apps/core/data-dev
+tmp-smoke
+tmp-*
+PLAN.md
+*.md
+!README.md
+docs/screenshots
+apps/android
+apps/desktop
+apps/runner
+.env
+.env.*
+*.log

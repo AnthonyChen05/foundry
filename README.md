@@ -71,6 +71,11 @@ methods (`chat.history`, `run.events`) as the convergence path.
 
 ## Quickstart (P5 state)
 
+> Full deployment guide — including the **Docker Compose** path (Linux,
+> image + sibling sandboxes + optional ntfy) — lives in
+> [`docs/setup.md`](docs/setup.md). The quickstart below is the
+> checkout-and-run path used for development.
+
 Status: P4 first client on top of P3 autonomy — provider adapters (`dummy`
 scripted, `openai_compat`, `anthropic` shim), OpenAI-compatible REST with SSE
 streaming, private WS plane (connect handshake, per-channel seq + replay
