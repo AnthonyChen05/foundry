@@ -133,6 +133,132 @@ fun SettingsScreen(store: AppStore, state: AppState, activity: androidx.activity
             }
         }
 
+        // Providers (admin REST §2.1; models omitted → server auto-pull).
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Providers", style = MaterialTheme.typography.titleMedium)
+                var providers by remember { mutableStateOf<List<app.foundry.android.data.ProviderRow>>(emptyList()) }
+                var pKind by rememberSaveable { mutableStateOf("openai_compat") }
+                var pBase by rememberSaveable { mutableStateOf("") }
+                var pKey by rememberSaveable { mutableStateOf("") }
+                var pModels by rememberSaveable { mutableStateOf("") }
+                var provMsg by remember { mutableStateOf("") }
+                var provBusy by remember { mutableStateOf(false) }
+
+                suspend fun reloadProviders() {
+                    val rest = store.restOrNull() ?: return
+                    val token = store.currentToken() ?: return
+                    providers = rest.adminListProviders(token)
+                }
+
+                androidx.compose.runtime.LaunchedEffect(Unit) {
+                    runCatching { reloadProviders() }
+                }
+
+                // The list.
+                if (providers.isEmpty()) {
+                    Text("no providers configured", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    providers.forEach { p ->
+                        Column(Modifier.fillMaxWidth()) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                Text("• ${p.id}", fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                                Text(p.kind, Modifier.padding(start = 4.dp))
+                                if (p.hasKey) Text("🔑")
+                                androidx.compose.material3.TextButton(onClick = {
+                                    val rest = store.restOrNull() ?: return@TextButton
+                                    val token = store.currentToken() ?: return@TextButton
+                                    scope.launch {
+                                        provBusy = true
+                                        try {
+                                            rest.deleteProvider(token, p.id)
+                                            reloadProviders()
+                                            provMsg = "deleted ${p.id}"
+                                        } catch (err: FoundryError) {
+                                            provMsg = err.message ?: "delete failed"
+                                        } finally {
+                                            provBusy = false
+                                        }
+                                    }
+                                }) { Text("delete", color = MaterialTheme.colorScheme.error) }
+                            }
+                            p.baseUrl?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        }
+                    }
+                }
+
+                // The add form.
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.FilterChip(
+                        selected = pKind == "openai_compat",
+                        onClick = { pKind = "openai_compat" },
+                        label = { Text("openai_compat") },
+                    )
+                    androidx.compose.material3.FilterChip(
+                        selected = pKind == "anthropic",
+                        onClick = { pKind = "anthropic" },
+                        label = { Text("anthropic") },
+                    )
+                }
+                OutlinedTextField(
+                    value = pBase,
+                    onValueChange = { pBase = it },
+                    label = { Text("base URL (e.g. http://host:11434/v1)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = pKey,
+                    onValueChange = { pKey = it },
+                    label = { Text("API key (vaulted server-side)") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = pModels,
+                    onValueChange = { pModels = it },
+                    label = { Text("models — one per line (empty = auto-pull)") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Button(
+                    onClick = {
+                        scope.launch {
+                            provBusy = true
+                            provMsg = ""
+                            try {
+                                val rest = store.restOrNull() ?: throw FoundryError("internal", "not connected")
+                                val token = store.currentToken() ?: throw FoundryError("internal", "no session")
+                                val res = rest.upsertProvider(
+                                    token,
+                                    pKind,
+                                    pBase.trim(),
+                                    pKey.trim().ifBlank { null },
+                                    pModels.split("\n").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { null },
+                                )
+                                provMsg = when {
+                                    res.pullError != null -> "saved " + res.id + ", but auto-pull failed: " + res.pullError
+                                    res.pulled == true -> "saved " + res.id + " — " + res.models.size + " model(s) pulled from the provider"
+                                    else -> "saved " + res.id
+                                }
+                                pKey = ""
+                                store.refreshCatalog()
+                                reloadProviders()
+                            } catch (err: FoundryError) {
+                                provMsg = err.message ?: "failed"
+                            } finally {
+                                provBusy = false
+                            }
+                        }
+                    },
+                    enabled = !provBusy && pBase.isNotBlank(),
+                ) { Text(if (provBusy) "Saving…" else "Add provider") }
+                if (provMsg.isNotBlank()) {
+                    Text(provMsg, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
         // Password change.
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

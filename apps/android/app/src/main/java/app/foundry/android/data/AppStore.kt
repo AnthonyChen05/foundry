@@ -484,6 +484,12 @@ class AppStore(
         }
     }
 
+    /** After an in-app admin change (providers), refetch the model catalog. */
+    fun refreshCatalog() {
+        val s = scope ?: return
+        s.launch { refreshModels() }
+    }
+
     fun refreshMessages(chatId: String) {
         val s = scope ?: return
         s.launch {

@@ -19,6 +19,24 @@ import java.util.concurrent.TimeUnit
 @Serializable
 data class PushResult(val pushRunId: String, val cloudEnvId: String)
 
+/** Admin providers (§2.1) as the phone needs them. */
+@Serializable
+data class ProviderRow(
+    val id: String,
+    val kind: String,
+    val baseUrl: String? = null,
+    val enabled: Boolean = true,
+    val hasKey: Boolean = false,
+)
+
+@Serializable
+data class UpsertProviderResult(
+    val id: String,
+    val models: List<String> = emptyList(),
+    val pulled: Boolean? = null,
+    val pullError: String? = null,
+)
+
 @Serializable
 private data class LoginResult(val sessionToken: String, val expiresAt: String)
 
@@ -64,6 +82,75 @@ class FoundryRest(private val baseUrl: String) {
     suspend fun pushChat(token: String, chatId: String): PushResult {
         val body = post("/v1/chats/$chatId/push", buildJsonObject { }, token = token)
         return json.decodeFromString(PushResult.serializer(), body)
+    }
+
+    // -- admin: providers (settings → providers) ------------------------------------
+
+    suspend fun adminListProviders(token: String): List<ProviderRow> {
+        val body = get("/v1/admin/providers", token = token)
+        @Serializable
+        data class Rows(val providers: List<ProviderRow>)
+        return json.decodeFromString(Rows.serializer(), body).providers
+    }
+
+    /**
+     * Upsert a provider. `models` null/empty = the SERVER auto-pulls them
+     * from the provider's OpenAI-compatible /models (openai_compat only);
+     * ids are `<provider>/<id>`-prefixed server-side.
+     */
+    suspend fun upsertProvider(
+        token: String,
+        kind: String,
+        baseUrl: String,
+        apiKey: String?,
+        models: List<String>? = null,
+    ): UpsertProviderResult {
+        val body = post("/v1/admin/providers", buildJsonObject {
+            put("kind", kind)
+            put("baseUrl", baseUrl)
+            if (apiKey != null && apiKey.isNotBlank()) put("apiKey", apiKey)
+            if (!models.isNullOrEmpty()) {
+                val rows = models.filter { it.isNotBlank() }.map { id -> buildJsonObject { put("id", id.trim()) } }
+                put("models", kotlinx.serialization.json.JsonArray(rows))
+            }
+        }, token = token)
+        return json.decodeFromString(UpsertProviderResult.serializer(), body)
+    }
+
+    suspend fun deleteProvider(token: String, id: String) {
+        del("/v1/admin/providers/$id", token = token)
+    }
+
+    private suspend fun get(path: String, token: String?): String = withContext(Dispatchers.IO) {
+        val builder = Request.Builder().url(baseUrl.trimEnd('/') + path)
+        if (token != null) builder.addHeader("Authorization", "Bearer $token")
+        val request = builder.get().build()
+        try {
+            client.newCall(request).execute().use { res ->
+                val text = res.body?.string() ?: ""
+                if (res.isSuccessful) text else throw restError(text, res.code)
+            }
+        } catch (e: FoundryError) {
+            throw e
+        } catch (e: Exception) {
+            throw FoundryError("internal", e.message ?: e.javaClass.simpleName)
+        }
+    }
+
+    private suspend fun del(path: String, token: String?): String = withContext(Dispatchers.IO) {
+        val builder = Request.Builder().url(baseUrl.trimEnd('/') + path)
+        if (token != null) builder.addHeader("Authorization", "Bearer $token")
+        val request = builder.delete().build()
+        try {
+            client.newCall(request).execute().use { res ->
+                val text = res.body?.string() ?: ""
+                if (res.isSuccessful) text else throw restError(text, res.code)
+            }
+        } catch (e: FoundryError) {
+            throw e
+        } catch (e: Exception) {
+            throw FoundryError("internal", e.message ?: e.javaClass.simpleName)
+        }
     }
 
     private suspend fun post(path: String, body: JsonObject, token: String?): String = withContext(Dispatchers.IO) {
