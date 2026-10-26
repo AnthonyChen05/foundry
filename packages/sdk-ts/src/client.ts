@@ -152,7 +152,7 @@ export class FoundryClient {
     baseUrl?: string;
     apiKey?: string;
     models?: { id: string; name?: string; context?: number; caps?: Record<string, boolean>; priceIn?: number; priceOut?: number }[];
-  }): Promise<{ id: string; models: string[] }> {
+  }): Promise<{ id: string; models: string[]; pulled?: boolean; pullError?: string }> {
     return this.json("POST", "/v1/admin/providers", body);
   }
 

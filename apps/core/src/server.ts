@@ -24,6 +24,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     // pino.Logger satisfies FastifyBaseLogger structurally; the generic-level
     // cast avoids fastify's msgPrefix typing friction.
     loggerInstance: makeLogger(config) as FastifyBaseLogger,
+    // Per-request "incoming request"/"request completed" spammed the healthy
+    // log (a STREAMING session is hundreds of completions). Route handlers
+    // log what matters; error paths still log via fastify's error hook.
+    disableRequestLogging: true,
     // Remote access is via Tailscale/loopback proxies (ADR-009); trust their hops.
     trustProxy: true,
   });

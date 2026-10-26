@@ -154,6 +154,41 @@ export class ProviderStore {
   }
 
   /**
+   * The provider's model list is REPLACED (upsert + prune whatever the new
+   * set doesn't carry): an explicit admin list or a fresh discovery pull is
+   * the source of truth, so models dropped upstream leave the catalog.
+   */
+  replaceModels(
+    providerId: string,
+    input: {
+      id: string;
+      name: string;
+      context: number;
+      caps: ModelCaps;
+      priceIn?: number;
+      priceOut?: number;
+      enabled?: boolean;
+    }[],
+  ): void {
+    if (input.length > 0) this.upsertModels(providerId, input);
+    const keep = new Set(input.map((m) => m.id));
+    const stale = this.dbx.db
+      .select({ id: models.id })
+      .from(models)
+      .where(eq(models.providerId, providerId))
+      .all()
+      .filter((m) => !keep.has(m.id));
+    for (const m of stale) {
+      this.dbx.db.delete(models).where(eq(models.id, m.id)).run();
+    }
+  }
+
+  /** The provider's model ids (catalog maintenance paths). */
+  modelIds(providerId: string): string[] {
+    return this.dbx.db.select({ id: models.id }).from(models).where(eq(models.providerId, providerId)).all().map((m) => m.id);
+  }
+
+  /**
    * Resolve a wire model id (e.g. "dummy/scripted"). Bare aliases ("llama3.1")
    * resolve against the first enabled model whose id ends with "/<alias>"
    * ("bare model" rule in protocol.md §2). Enabled only.

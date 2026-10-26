@@ -220,9 +220,13 @@ copy, the DB stores hashes). OpenAI error envelope `{ error: { code, message } }
   without `id`: create with a generated id. Body: `{ id?, kind:
   "openai_compat"|"anthropic"|"dummy", baseUrl?, apiKey?, models?: [{ id,
   name?, context?, caps?, priceIn?, priceOut? }] }`. Model ids become
-  `<provider>/<model>` unless already prefixed. `apiKey` is accepted here
-  ONCE (guardrail #2), vaulted, never echoed — responses and list carry
-  `hasKey: boolean` only.
+  `<provider>/<model>` unless already prefixed. An EXPLICIT `models` list
+  REPLACES the provider's catalog (what's gone upstream leaves); omitting
+  `models` on an openai_compat provider PULLS them from its OpenAI-compatible
+  `GET {baseUrl}/models` (4s timeout; discovered models default
+  tool-capable) and answers `pulled: true` / `pullError` on failure. Note
+  `apiKey` is accepted here ONCE (guardrail #2), vaulted, never echoed —
+  responses and list carry `hasKey: boolean` only.
 - `GET /v1/admin/providers` → `{ providers: [{ id, kind, baseUrl, enabled,
   hasKey }] }`.
 - `DELETE /v1/admin/providers/:id` → `{ ok: true }` (404 unknown).

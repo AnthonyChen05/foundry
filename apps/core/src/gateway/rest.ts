@@ -382,7 +382,9 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
     });
 
     const effectiveIds: string[] = [];
-    if (Array.isArray(body.models)) {
+    let pulled: boolean | undefined;
+    let pullError: string | undefined;
+    if (Array.isArray(body.models) && body.models.length > 0) {
       const upserts = body.models.map((m) => {
         const fullId = typeof m.id === "string" && m.id.length > 0
           ? (m.id.includes("/") ? m.id : `${providerId}/${m.id}`)
@@ -403,7 +405,45 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
           ...(m.priceOut !== undefined ? { priceOut: m.priceOut } : {}),
         };
       }).filter((m): m is NonNullable<typeof m> => m !== undefined);
-      if (upserts.length > 0) deps.providers.upsertModels(providerId, upserts);
+      // Explicit list wins AND replaces (drops models gone upstream).
+      deps.providers.replaceModels(providerId, upserts);
+    } else if (kind === "openai_compat") {
+      // Models omitted → pull the provider's OpenAI-compatible /models
+      // (Ollama/LM Studio/vLLM/OpenRouter all serve it) and adopt the list.
+      // A failed pull does NOT fail the upsert — the provider is saved and
+      // `pullError` tells the operator what to look at.
+      const base = (
+        body.baseUrl ?? deps.providers.record(providerId, { withKey: false })?.baseUrl ?? ""
+      ).replace(/\/+$/, "");
+      if (base.length > 0) {
+        const key = deps.providers.record(providerId, { withKey: true })?.apiKey;
+        try {
+          const res = await fetch(`${base}/models`, {
+            headers: { ...(key !== undefined ? { Authorization: `Bearer ${key}` } : {}) },
+            signal: AbortSignal.timeout(4_000), // a slow provider must not hang the admin op
+          });
+          if (res.ok) {
+            const list = (await res.json()) as { data?: { id?: unknown }[] };
+            const discovered = (Array.isArray(list.data) ? list.data : [])
+              .filter((m): m is { id: string } => typeof m["id"] === "string" && (m["id"] as string).length > 0)
+              .map((m) => ({
+                id: m.id.includes("/") ? m.id : `${providerId}/${m.id}`,
+                name: m.id,
+                context: 8192,
+                // Discovered models default tool-capable; correct per model
+                // in the admin list if one misbehaves with tools.
+                caps: { vision: false, tools: true, reasoning: false, json: false },
+              }));
+            effectiveIds.push(...discovered.map((m) => m.id));
+            deps.providers.replaceModels(providerId, discovered);
+            pulled = true;
+          } else {
+            pullError = `${base}/models → ${res.status}`;
+          }
+        } catch (err) {
+          pullError = err instanceof Error ? err.message : String(err);
+        }
+      }
     }
     // reply.code is NOT awaited: the reply is a thenable that resolves only
     // when the response is sent — awaiting it here (without .send) deadlocks
@@ -412,9 +452,14 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
     deps.audit?.record({
       action: "admin.providers.upsert",
       target: providerId,
-      meta: { created, models: effectiveIds, hasNewKey: body.apiKey !== undefined },
+      meta: { created, models: effectiveIds, hasNewKey: body.apiKey !== undefined, ...(pulled !== undefined ? { pulled } : {}) },
     });
-    return { id: providerId, models: effectiveIds };
+    return {
+      id: providerId,
+      models: effectiveIds,
+      ...(pulled !== undefined ? { pulled } : {}),
+      ...(pullError !== undefined ? { pullError } : {}),
+    };
   });
 
   app.get("/v1/admin/providers", async () => {

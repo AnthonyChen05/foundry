@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { rest } from "$lib/foundry.svelte";
   import type { McpServerConfig } from "@foundry/sdk-ts";
 
@@ -17,17 +18,54 @@
   let note = $state("");
   let busy = $state(false);
 
-  async function run(action: () => Promise<void>): Promise<void> {
-    if (busy) return;
-    busy = true;
-    note = "";
-    try {
-      await action();
-    } catch (err) {
-      note = err instanceof Error ? err.message : String(err);
-    } finally {
-      busy = false;
+  function error(err: unknown): void {
+    note = err instanceof Error ? err.message : String(err);
+  }
+
+  type Section = Tab;
+  /** Server reads for the visible section — no busy gate, no note stomping.
+   *  "account" has nothing to fetch (falls out of the switch). */
+  async function fetchInto(section: Section): Promise<void> {
+    switch (section) {
+      case "account":
+        return;
+      case "providers":
+        providers = (await rest().adminListProviders()).providers;
+        break;
+      case "keys":
+        keys = (await rest().adminListKeys()).keys;
+        break;
+      case "schedules":
+        schedules = (await rest().adminListSchedules()).schedules;
+        break;
+      case "hooks":
+        hooks = (await rest().adminListHooks()).hooks;
+        break;
+      case "mcp":
+        mcp = (await rest().adminGetMcpServers()).status;
+        break;
+      case "system": {
+        const [audit, backupList] = await Promise.all([rest().adminListAudit(auditLimit), rest().adminListBackups()]);
+        auditRows = audit.events;
+        backups = backupList.backups;
+        break;
+      }
     }
+  }
+
+  /** A mutating op under the busy gate; `refresh` is its post-save read. */
+  function run(action: (refresh: () => Promise<void>) => Promise<void>): void {
+    void (async () => {
+      busy = true;
+      note = "";
+      try {
+        await action(() => fetchInto(tab));
+      } catch (err) {
+        note = err instanceof Error ? err.message : String(err);
+      } finally {
+        busy = false;
+      }
+    })();
   }
 
   // -- providers -----------------------------------------------------------
@@ -47,34 +85,36 @@
   let pModels = $state("");
 
   function refreshProviders(): void {
-    void run(async () => {
-      providers = (await rest().adminListProviders()).providers;
-    });
+    void fetchInto("providers").catch(error);
   }
 
   function saveProvider(): void {
-    void run(async () => {
-      // Model ids one per line; empty for providers known by their base URL.
+    void run(async (refresh) => {
+      // Model ids one per line. Empty = pull them from the provider's
+      // OpenAI-compatible /models endpoint (Ollama/LM Studio/vLLM/…).
       const models = pModels
         .split("\n")
         .map((s) => s.trim())
         .filter((s) => s.length > 0)
         .map((id) => ({ id }));
-      await rest().adminUpsertProvider({
+      const res = await rest().adminUpsertProvider({
         kind: pKind,
         baseUrl: pBase,
         ...(pKey.trim().length > 0 ? { apiKey: pKey.trim() } : {}),
         ...(models.length > 0 ? { models } : {}),
       });
       pKey = "";
-      refreshProviders();
+      if (res.pullError !== undefined) {
+        error(new Error(`saved ${res.id}, but model auto-pull failed: ${res.pullError} — enter models manually`));
+      }
+      await refresh();
     });
   }
 
   function delProvider(id: string): void {
-    void run(async () => {
+    void run(async (refresh) => {
       await rest().adminDeleteProvider(id);
-      refreshProviders();
+      await refresh();
     });
   }
 
@@ -85,24 +125,22 @@
   let freshKey = $state("");
 
   function refreshKeys(): void {
-    void run(async () => {
-      keys = (await rest().adminListKeys()).keys;
-    });
+    void fetchInto("keys").catch(error);
   }
 
   function createKey(): void {
-    void run(async () => {
+    void run(async (refresh) => {
       const res = await rest().adminCreateKey(keyName.trim().length > 0 ? keyName.trim() : undefined);
       freshKey = res.key;
       keyName = "";
-      refreshKeys();
+      await refresh();
     });
   }
 
   function revokeKey(id: string): void {
-    void run(async () => {
+    void run(async (refresh) => {
       await rest().adminRevokeKey(id);
-      refreshKeys();
+      await refresh();
     });
   }
 
@@ -127,13 +165,11 @@
   let sPrompt = $state("");
 
   function refreshSchedules(): void {
-    void run(async () => {
-      schedules = (await rest().adminListSchedules()).schedules;
-    });
+    void fetchInto("schedules").catch(error);
   }
 
   function createSchedule(): void {
-    void run(async () => {
+    void run(async (refresh) => {
       await rest().adminCreateSchedule({
         name: sName.trim(),
         kind: sKind,
@@ -142,21 +178,21 @@
       });
       sName = "";
       sPrompt = "";
-      refreshSchedules();
+      await refresh();
     });
   }
 
   function toggleSchedule(id: string, enabled: boolean, reschedule: boolean): void {
-    void run(async () => {
+    void run(async (refresh) => {
       await rest().adminPatchSchedule(id, { enabled, ...(reschedule ? { reschedule: true } : {}) });
-      refreshSchedules();
+      await refresh();
     });
   }
 
   function delSchedule(id: string): void {
-    void run(async () => {
+    void run(async (refresh) => {
       await rest().adminDeleteSchedule(id);
-      refreshSchedules();
+      await refresh();
     });
   }
 
@@ -167,24 +203,22 @@
   let freshHook = $state<{ url: string; secret: string } | undefined>(undefined);
 
   function refreshHooks(): void {
-    void run(async () => {
-      hooks = (await rest().adminListHooks()).hooks;
-    });
+    void fetchInto("hooks").catch(error);
   }
 
   function createHook(): void {
-    void run(async () => {
+    void run(async (refresh) => {
       const res = await rest().adminCreateHook(hName.trim());
       freshHook = { url: res.url, secret: res.secret };
       hName = "";
-      refreshHooks();
+      await refresh();
     });
   }
 
   function delHook(id: string): void {
-    void run(async () => {
+    void run(async (refresh) => {
       await rest().adminDeleteHook(id);
-      refreshHooks();
+      await refresh();
     });
   }
 
@@ -194,16 +228,14 @@
   let mcpJson = $state("[]");
 
   function refreshMcp(): void {
-    void run(async () => {
-      mcp = (await rest().adminGetMcpServers()).status;
-    });
+    void fetchInto("mcp").catch(error);
   }
 
   function saveMcp(): void {
-    void run(async () => {
+    void run(async (refresh) => {
       const servers = JSON.parse(mcpJson) as McpServerConfig[];
       await rest().adminPutMcpServers(servers);
-      refreshMcp();
+      await refresh();
     });
   }
 
@@ -215,7 +247,7 @@
   let pwSaved = $state(false);
 
   function savePassword(): void {
-    void run(async () => {
+    void run(async (_refresh) => {
       pwSaved = false;
       if (newPw.length < 8) throw new Error("New password must be at least 8 characters.");
       if (newPw !== newPw2) throw new Error("New passwords do not match.");
@@ -241,21 +273,14 @@
   let auditLimit = $state(200);
   let backups = $state<{ dir: string; bytes: number }[]>([]);
 
-  // One op per panel change: run()'s busy gate would silently skip a second
-  // back-to-back refresh, so audit + backups load together.
   function refreshSystem(): void {
-    void run(async () => {
-      const [audit, backupList] = await Promise.all([rest().adminListAudit(auditLimit), rest().adminListBackups()]);
-      auditRows = audit.events;
-      backups = backupList.backups;
-    });
+    void fetchInto("system").catch(error);
   }
 
   function runBackup(): void {
     void run(async () => {
       await rest().adminRunBackup();
-      const backupList = await rest().adminListBackups();
-      backups = backupList.backups;
+      backups = (await rest().adminListBackups()).backups;
     });
   }
 
@@ -267,28 +292,14 @@
     return new Date(at).toLocaleString();
   }
 
-  // tab switching refreshes the visible section
+  // Tab switch → load that section. untrack: the read path's own writes
+  // (providers/keys/…/busy) must not re-trigger this effect (without it the
+  // fetch's busy flips made the effect fire itself forever).
   $effect(() => {
-    switch (tab) {
-      case "providers":
-        refreshProviders();
-        break;
-      case "keys":
-        refreshKeys();
-        break;
-      case "schedules":
-        refreshSchedules();
-        break;
-      case "hooks":
-        refreshHooks();
-        break;
-      case "mcp":
-        refreshMcp();
-        break;
-      case "system":
-        refreshSystem();
-        break;
-    }
+    const t = tab;
+    untrack(() => {
+      void fetchInto(t).catch(error);
+    });
   });
 </script>
 
@@ -325,7 +336,7 @@
           <input id="p-key" type="password" bind:value={pKey} placeholder="sk-…" autocomplete="off" />
         </div>
         <div class="field">
-          <label for="p-models">models — one id per line (optional)</label>
+          <label for="p-models">models — one id per line (empty = pull from the provider's /models)</label>
           <textarea id="p-models" rows="3" bind:value={pModels} placeholder="gpt-4o&#10;gpt-4o-mini"></textarea>
         </div>
         <button class="primary" onclick={saveProvider} disabled={busy}>Save provider</button>

@@ -121,15 +121,18 @@ describe("REST models + providers admin", () => {
   });
 
   it("upserting with id updates an existing provider", async () => {
+    // explicit models: no auto-pull (the pull would burn the 4s timeout on a dead host)
     const first = await jso("POST", "/v1/admin/providers", ctx.server.token, {
       kind: "openai_compat",
       baseUrl: "http://a",
+      models: [{ id: "m-a" }],
     });
     const firstId = first.body.id as string;
     const second = await jso("POST", "/v1/admin/providers", ctx.server.token, {
       id: firstId,
       kind: "openai_compat",
       baseUrl: "http://b",
+      models: [{ id: "m-b" }],
     });
     expect(second.status).toBe(200);
     const listed = await jso("GET", "/v1/admin/providers", ctx.server.token);
@@ -140,11 +143,12 @@ describe("REST models + providers admin", () => {
 
   it("upserting a fresh explicit id CREATES it (idempotent operator config)", async () => {
     // First call with a stable id → 201 create; repeating it → 200 patch of
-    // the SAME row (never a duplicate prov_*).
+    // the SAME row (never a duplicate prov_*). Explicit models: no pull.
     const first = await jso("POST", "/v1/admin/providers", ctx.server.token, {
       id: "ollama",
       kind: "openai_compat",
       baseUrl: "http://127.0.0.1:11434",
+      models: [{ id: "probe-model" }],
     });
     expect(first.status).toBe(201);
     expect(first.body.id).toBe("ollama");
@@ -152,6 +156,7 @@ describe("REST models + providers admin", () => {
       id: "ollama",
       kind: "openai_compat",
       baseUrl: "http://o2",
+      models: [{ id: "probe-model" }],
     });
     expect(repeat.status).toBe(200);
     const listed = await jso("GET", "/v1/admin/providers", ctx.server.token);

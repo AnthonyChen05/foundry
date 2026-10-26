@@ -170,9 +170,11 @@ curl -s -X POST http://127.0.0.1:8787/v1/admin/providers \
   -H 'content-type: application/json' -d '{
     "kind": "openai_compat",
     "baseUrl": "http://host.docker.internal:11434",
-    "apiKey": "ollama",
-    "models": [{"id": "gemma3:4b", "name": "Gemma 3 4B", "caps": {"tools": true}}]
+    "apiKey": "ollama"
   }'
+# Omitting `models` auto-pulls them from the provider's OpenAI-compatible
+# /models endpoint (Ollama/LM Studio/vLLM/OpenRouter); for anthropic providers
+# models are entered by hand. Discovered models default to tool-capable.
 # quick real-provider check:  pnpm probe:ollama
 ```
 
