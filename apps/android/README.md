@@ -27,6 +27,11 @@ no client-owned truth. Port of `apps/web`'s `foundry.svelte.ts` store to a
 - `ui/` — single-activity Compose: login, chats, chat (drafts + gate cards +
   local/cloud binding chip + push-to-cloud), run timeline, terminal (PTY via
   `term.*`), files, settings (executor, models, password, ntfy, logout).
+- `ui/Fold.kt` — fold-awareness (make-your-app-fold-aware): folding features
+  via Jetpack WindowManager (`rememberFoldingFeatures`); on expanded windows
+  the chats route becomes a two-pane list/detail shell split at the hinge's
+  left edge (book posture); compact windows (folded cover) keep
+  single-pane + bottom bar; the activity declares `resizeableActivity`.
 
 ## What this client is NOT
 
