@@ -1,4 +1,4 @@
-import { parseSseLines } from "./openai_compat.js";
+import { openAiV1Base, parseSseLines } from "./openai_compat.js";
 import type { ChatChunk } from "./types.js";
 import { ProviderError, type ChatCompletionRequest, type ChatCompletionResponse, type ProviderAdapter, type ProviderRequestContext, type ToolDefinition, type ToolChoice, type Usage } from "./types.js";
 
@@ -304,7 +304,7 @@ export function createAnthropicAdapter(): ProviderAdapter {
   };
 
   async function post(ctx: ProviderRequestContext, body: AnthropicRequest): Promise<Response> {
-    const url = `${ctx.baseUrl.replace(/\/$/, "")}${ENDPOINT}`;
+    const url = `${openAiV1Base(ctx.baseUrl)}${ENDPOINT}`;
     let res: Response;
     try {
       res = await fetch(url, {

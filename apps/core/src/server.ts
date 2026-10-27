@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance, type FastifyBaseLogger } from "fastify";
+import Fastify, { LogController, type FastifyInstance, type FastifyBaseLogger } from "fastify";
 import websocket from "@fastify/websocket";
 import { PROTOCOL_VERSION } from "@foundry/protocol";
 import type { AppConfig } from "./config.js";
@@ -27,7 +27,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     // Per-request "incoming request"/"request completed" spammed the healthy
     // log (a STREAMING session is hundreds of completions). Route handlers
     // log what matters; error paths still log via fastify's error hook.
-    disableRequestLogging: true,
+    // A LogController instance replaces fastify 5's deprecated top-level flag.
+    logController: new LogController({ disableRequestLogging: true }),
     // Remote access is via Tailscale/loopback proxies (ADR-009); trust their hops.
     trustProxy: true,
   });

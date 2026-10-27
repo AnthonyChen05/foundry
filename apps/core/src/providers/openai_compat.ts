@@ -18,6 +18,16 @@ import {
 
 export const OPENAI_ENDPOINT = "/v1/chat/completions";
 
+/**
+ * The provider's OpenAI-compatible API ROOT. The admin convention: `baseUrl`
+ * points at the provider ROOT (e.g. `http://host:11434`) — core attaches
+ * `/v1/…` paths itself; a trailing `/v1` (and slashes) are normalized away
+ * so copy-pasted `/v1`-suffixed base URLs don't double up.
+ */
+export function openAiV1Base(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, "").replace(/\/v1$/i, "");
+}
+
 /** Parse an SSE byte stream of `data: {...}` events into decoded strings. */
 export async function* parseSseLines(body: AsyncIterable<Uint8Array>): AsyncGenerator<string> {
   const decoder = new TextDecoder();
@@ -60,8 +70,8 @@ export async function requestUpstream(
   ctx: ProviderRequestContext,
   body: ChatCompletionRequest,
 ): Promise<{ url: string; res: Response }> {
-  const base = ctx.baseUrl.replace(/\/$/, "");
-  const url = `${base}${OPENAI_ENDPOINT}`;
+  const base = openAiV1Base(ctx.baseUrl);
+  const url = `${base}/v1/chat/completions`;
   let res: Response;
   try {
     res = await fetch(url, {
@@ -124,7 +134,7 @@ export function createOpenAiCompatAdapter(): ProviderAdapter {
 
     /** POST {base}/v1/embeddings — Ollama/OpenAI/vLLM all speak it. */
     async embed(texts: string[], ctx: ProviderRequestContext): Promise<number[][]> {
-      const base = ctx.baseUrl.replace(/\/$/, "");
+      const base = openAiV1Base(ctx.baseUrl);
       const url = `${base}/v1/embeddings`;
       let res: Response;
       try {

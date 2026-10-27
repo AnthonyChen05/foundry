@@ -19,14 +19,14 @@ afterEach(async () => {
   for (const s of fixtures.splice(0)) s.close();
 });
 
-async function modelsFixture(list: { id: string }[]): Promise<string> {
+async function modelsFixture(list: { id: string; display_name?: string }[]): Promise<string> {
   const server = createServer((req, res) => {
-    if (req.headers.authorization === undefined) {
-      res.writeHead(401).end();
+    if (req.url?.endsWith("/models")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ object: "list", data: list }));
       return;
     }
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ object: "list", data: list }));
+    res.writeHead(404).end();
   });
   fixtures.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -39,19 +39,23 @@ async function boot(overrides?: Parameters<typeof startServer>[0]): Promise<void
 }
 
 async function jso(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+  // Authorization-only for bodyless calls: content-type + no body 400s (FST_ERR_CTP_EMPTY_JSON_BODY).
   const r = await fetch(`${ctx.server.baseUrl}${path}`, {
     method,
-    headers: { authorization: `Bearer ${ctx.server.token}`, "content-type": "application/json" },
+    headers: body === undefined
+      ? { authorization: `Bearer ${ctx.server.token}` }
+      : { authorization: `Bearer ${ctx.server.token}`, "content-type": "application/json" },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
-  return { status: r.status, body: (await r.json()) as Record<string, unknown> };
+  return { status: r.status, body: (r.status === 204 ? {} : (await r.json()) as Record<string, unknown>) };
 }
 
 describe("provider model auto-pull", () => {
-  it("upserting without models pulls them from the provider's /models", async () => {
+  it("upserting without models pulls them from the provider's /v1/models (both base forms)", async () => {
     await boot();
     const base = await modelsFixture([{ id: "llama3:8b" }, { id: "qwen2.5:7b" }]);
 
+    // ROOT-form baseUrl (repo convention — core attaches /v1)
     const up = await jso("POST", "/v1/admin/providers", { kind: "openai_compat", baseUrl: base, apiKey: "k-1" });
     expect(up.status).toBe(201);
     expect(up.body.pulled).toBe(true);
@@ -59,9 +63,44 @@ describe("provider model auto-pull", () => {
     const pid = up.body.id as string;
     expect(up.body.models).toEqual([`${pid}/llama3:8b`, `${pid}/qwen2.5:7b`]);
 
+    // /v1-SUFFIXED baseUrl (copy-pasted OpenAI clients) — normalized, not doubled
+    const up2 = await jso("POST", "/v1/admin/providers", { kind: "openai_compat", baseUrl: `${base}/v1`, apiKey: "k-2" });
+    expect(up2.status).toBe(201);
+    expect(up2.body.pulled).toBe(true);
+    expect(up2.body.models).toEqual([`${up2.body.id}/llama3:8b`, `${up2.body.id}/qwen2.5:7b`]);
+
     const catalog = await jso("GET", "/v1/models");
     const ids = (catalog.body.data as { id: string }[]).map((m) => m.id);
     expect(ids).toEqual(expect.arrayContaining([`${pid}/llama3:8b`, `${pid}/qwen2.5:7b`]));
+  });
+
+  it("pulls anthropic providers with the shim's headers", async () => {
+    await boot();
+    const base = await modelsFixture([{ id: "claude-sonnet-5-5", display_name: "Claude Sonnet 5.5" }]);
+    const up = await jso("POST", "/v1/admin/providers", { kind: "anthropic", baseUrl: base, apiKey: "sk-ant-test" });
+    expect(up.status).toBe(201);
+    expect(up.body.pulled).toBe(true);
+    const pid = up.body.id as string;
+    expect(ctx.server.rt.providers.modelIds(pid)).toEqual([`${pid}/claude-sonnet-5-5`]);
+    // display_name rode along as the model's name
+    const catalog = ctx.server.rt.providers.listModels();
+    expect(catalog.find((m) => m.id === `${pid}/claude-sonnet-5-5`)?.name).toBe("Claude Sonnet 5.5");
+  });
+
+  it("DELETE cascades the model rows (no FK 500) + the provider's vault ciphertext", async () => {
+    await boot();
+    const base = await modelsFixture([{ id: "m1" }]);
+    const up = await jso("POST", "/v1/admin/providers", { kind: "openai_compat", baseUrl: base, apiKey: "k-3" });
+    expect(up.status).toBe(201);
+    const pid = up.body.id as string;
+    expect(ctx.server.rt.providers.modelIds(pid)).toHaveLength(1);
+
+    const del = await jso("DELETE", `/v1/admin/providers/${pid}`);
+    expect(del.status).toBe(200);
+    expect(ctx.server.rt.providers.modelIds(pid)).toEqual([]);
+    expect(ctx.server.rt.providers.record(pid, { withKey: false })).toBeUndefined();
+    const listed = await jso("GET", "/v1/admin/providers");
+    expect((listed.body.providers as { id: string }[]).some((p) => p.id === pid)).toBe(false);
   });
 
   it("an upsert WITH models replaces the list; the provider's dropped models leave", async () => {

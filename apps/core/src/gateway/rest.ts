@@ -17,6 +17,7 @@ import type { ProviderStore } from "../providers/store.js";
 import type { ToolChoice, ToolDefinition } from "../providers/types.js";
 import { ProviderError } from "../providers/types.js";
 import type { ChatChunk, Usage } from "../providers/types.js";
+import { openAiV1Base } from "../providers/openai_compat.js";
 import type { McpManager } from "../agent/mcp.js";
 import type { PushService } from "../executor/push.js";
 import { McpServerSchema, type McpServer } from "../agent/mcp.js";
@@ -407,28 +408,34 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
       }).filter((m): m is NonNullable<typeof m> => m !== undefined);
       // Explicit list wins AND replaces (drops models gone upstream).
       deps.providers.replaceModels(providerId, upserts);
-    } else if (kind === "openai_compat") {
-      // Models omitted → pull the provider's OpenAI-compatible /models
-      // (Ollama/LM Studio/vLLM/OpenRouter all serve it) and adopt the list.
-      // A failed pull does NOT fail the upsert — the provider is saved and
-      // `pullError` tells the operator what to look at.
-      const base = (
-        body.baseUrl ?? deps.providers.record(providerId, { withKey: false })?.baseUrl ?? ""
-      ).replace(/\/+$/, "");
+    } else if (kind === "openai_compat" || kind === "anthropic") {
+      // Models omitted → pull them from the provider's OpenAI-compatible
+      // model list (`GET {root}/v1/models` — Ollama/LM Studio/vLLM/
+      // OpenRouter; for anthropic the shim's origin serves the same shape
+      // with x-api-key). A failed pull does NOT fail the upsert — the
+      // provider is saved and `pullError` tells the operator what to fix.
+      const rec = deps.providers.record(providerId, { withKey: true });
+      const base = openAiV1Base(body.baseUrl ?? rec?.baseUrl ?? "");
       if (base.length > 0) {
-        const key = deps.providers.record(providerId, { withKey: true })?.apiKey;
+        const key = rec?.apiKey;
+        const headers: Record<string, string> =
+          kind === "anthropic"
+            ? { "x-api-key": key ?? "", "anthropic-version": "2023-06-01" }
+            : { ...(key !== undefined ? { Authorization: `Bearer ${key}` } : {}) };
         try {
-          const res = await fetch(`${base}/models`, {
-            headers: { ...(key !== undefined ? { Authorization: `Bearer ${key}` } : {}) },
+          const res = await fetch(`${base}/v1/models`, {
+            headers,
             signal: AbortSignal.timeout(4_000), // a slow provider must not hang the admin op
           });
           if (res.ok) {
-            const list = (await res.json()) as { data?: { id?: unknown }[] };
+            const list = (await res.json()) as { data?: { id?: unknown; display_name?: unknown }[] };
             const discovered = (Array.isArray(list.data) ? list.data : [])
               .filter((m): m is { id: string } => typeof m["id"] === "string" && (m["id"] as string).length > 0)
               .map((m) => ({
                 id: m.id.includes("/") ? m.id : `${providerId}/${m.id}`,
-                name: m.id,
+                name: typeof (m as { display_name?: unknown }).display_name === "string"
+                  ? String((m as { display_name?: unknown }).display_name)
+                  : m.id,
                 context: 8192,
                 // Discovered models default tool-capable; correct per model
                 // in the admin list if one misbehaves with tools.
@@ -438,7 +445,7 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
             deps.providers.replaceModels(providerId, discovered);
             pulled = true;
           } else {
-            pullError = `${base}/models → ${res.status}`;
+            pullError = `${base}/v1/models → ${res.status}`;
           }
         } catch (err) {
           pullError = err instanceof Error ? err.message : String(err);

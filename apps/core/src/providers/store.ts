@@ -1,4 +1,4 @@
-import { and, eq, like } from "drizzle-orm";
+import { and, eq, like, sql } from "drizzle-orm";
 import type { ModelCaps } from "@foundry/protocol";
 import type { FoundryDb } from "../db/open.js";
 import { models, providers, vaultCiphertexts } from "../db/schema.js";
@@ -106,6 +106,21 @@ export class ProviderStore {
   }
 
   remove(id: string): boolean {
+    // FK cascade by hand: models reference the provider, and the ciphertext
+    // row is private to this provider (secretKeyId mints one per upsert).
+    const row = this.dbx.db.select().from(providers).where(eq(providers.id, id)).get();
+    if (!row) return false;
+    this.dbx.db.delete(models).where(eq(models.providerId, id)).run();
+    if (row.vaultKeyId !== null) {
+      const shared = this.dbx.db
+        .select({ n: sql<number>`count(*)` })
+        .from(providers)
+        .where(eq(providers.vaultKeyId, row.vaultKeyId))
+        .get();
+      if ((shared?.n ?? 0) <= 1) {
+        this.dbx.db.delete(vaultCiphertexts).where(eq(vaultCiphertexts.id, row.vaultKeyId)).run();
+      }
+    }
     const res = this.dbx.db.delete(providers).where(eq(providers.id, id)).run();
     return (res.changes ?? 0) > 0;
   }

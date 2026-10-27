@@ -222,11 +222,14 @@ copy, the DB stores hashes). OpenAI error envelope `{ error: { code, message } }
   name?, context?, caps?, priceIn?, priceOut? }] }`. Model ids become
   `<provider>/<model>` unless already prefixed. An EXPLICIT `models` list
   REPLACES the provider's catalog (what's gone upstream leaves); omitting
-  `models` on an openai_compat provider PULLS them from its OpenAI-compatible
-  `GET {baseUrl}/models` (4s timeout; discovered models default
+  `models` on an openai_compat or anthropic provider PULLS them from the
+  provider's `GET {root}/v1/models` (the SAME base normalization the
+  completions/embeddings/messages paths use — trailing `/v1` in baseUrl is
+  dropped before `/v1/...` is attached; 4s timeout; discovered models default
   tool-capable) and answers `pulled: true` / `pullError` on failure. Note
   `apiKey` is accepted here ONCE (guardrail #2), vaulted, never echoed —
-  responses and list carry `hasKey: boolean` only.
+  responses and list carry `hasKey: boolean` only; DELETE cascades the
+  provider's model rows + vault ciphertext.
 - `GET /v1/admin/providers` → `{ providers: [{ id, kind, baseUrl, enabled,
   hasKey }] }`.
 - `DELETE /v1/admin/providers/:id` → `{ ok: true }` (404 unknown).
