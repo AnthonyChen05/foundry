@@ -137,6 +137,33 @@ export const models = sqliteTable(
   (t) => [index("models_provider_idx").on(t.providerId)],
 );
 
+/**
+ * Model profiles (operator ask 2026-10-26: "personality of the LLM we're
+ * talking to", Open WebUI's model pages): a DERIVED model — a base catalog
+ * model plus a custom name/avatar, a system prompt, and default advanced
+ * parameters. Selecting the profile's id everywhere (sys.models, chat.*,
+ * /v1/models + completions) resolves to the wrapped base with the prompt
+ * prepended and the params merged UNDER the caller's explicit values.
+ */
+export const modelProfiles = sqliteTable(
+  "model_profiles",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    /** The wrapped catalog model id ('<provider>/<model>'). */
+    baseModelId: text("base_model_id").notNull(),
+    name: text("name").notNull(),
+    /** A display glyph for the profile (emoji); optional. */
+    avatar: text("avatar"),
+    systemPrompt: text("system_prompt"),
+    /** Advanced defaults: temperature/topP/maxTokens/presence/frequency/seed/stop. */
+    params: text("params", { mode: "json" }).$type<Record<string, unknown>>(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [index("model_profiles_user_idx").on(t.userId)],
+);
+
 // ---------------------------------------------------------------------------
 // vault (AES-256-GCM ciphertext triples; master key = FOUNDRY_MASTER_KEY)
 // ---------------------------------------------------------------------------
@@ -409,6 +436,7 @@ export const ALL_TABLES = [
   "messages",
   "providers",
   "models",
+  "model_profiles",
   "vault",
   "runs",
   "run_events",

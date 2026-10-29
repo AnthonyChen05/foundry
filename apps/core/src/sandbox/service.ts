@@ -236,12 +236,14 @@ export class SandboxService {
       // fast + always writable by the sandbox user.
       XDG_STATE_HOME: "/tmp/ot-state",
     };
-    if (this.config.sandboxEgress === "allowlist") {
+    if (this.config.sandboxEgress !== "open") {
       // guardrail #3: OT's DNS-whitelist firewall passes ONLY the gateway
       // proxy (host.docker.internal); everything else is dropped at OUTPUT.
-      // Kernel caveat: Docker Desktop's VM lacks ipset → OT refuses to start
-      // there — FOUNDRY_SANDBOX_EGRESS=open leaves OT unfiltered (proxy still
-      // holds every esc_→real-key swap). docker.spec.ts asserts both paths.
+      // "allowlist" is the strict mode (fails the launch when the kernel
+      // lacks ipset); "auto" attempts the firewall and falls back to open
+      // egress with a loud warn when the kernel can't install it (Docker
+      // Desktop) — the egress proxy still holds every esc_→real-key swap.
+      // docker.spec.ts asserts both paths.
       envVars["OPEN_TERMINAL_ALLOWED_DOMAINS"] = "host.docker.internal";
     }
     const handle = await this.driver.create({
@@ -489,13 +491,13 @@ export async function makeDriver(
   const mod = await import("./docker.js");
   if (config.sandboxDriver === "docker") {
     // Raw dockerode chosen explicitly — surface failures, no fallback.
-    const d = new mod.DockerDriver(config);
+    const d = new mod.DockerDriver(config, log);
     if (!(await d.daemonReachable())) throw new SandboxError("docker daemon unreachable", 503);
     return d;
   }
   // auto: driver #1 (open_terminal containers launched via dockerode), fake fallback.
   try {
-    const d = new mod.OpenTerminalDriver(config);
+    const d = new mod.OpenTerminalDriver(config, log);
     if (await d.daemonReachable()) return d;
     throw new Error("docker daemon unreachable");
   } catch {
@@ -518,6 +520,8 @@ export async function makeOtDriver(
   sandboxRuntime = "runc",
   /** Where the runner's OT containers' mapped port lives (default: host loopback). */
   sandboxOtHost = "127.0.0.1",
+  /** Local envs run egress-open (ADR-015); the value only gates the launcher's fallback. */
+  sandboxEgress: "allowlist" | "open" | "auto" = "open",
 ): Promise<OpenTerminalDriver> {
-  return new OpenTerminalDriver({ sandboxImage, sandboxRuntime, sandboxOtHost });
+  return new OpenTerminalDriver({ sandboxImage, sandboxRuntime, sandboxOtHost, sandboxEgress });
 }

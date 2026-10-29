@@ -49,9 +49,11 @@ export interface RunChatResult {
 }
 
 interface ResolvedRoute {
-  runModelId: string; // catalog id e.g. "dummy/scripted"
+  runModelId: string; // catalog id e.g. "dummy/scripted" — or a profile id (mp_…)
   upstreamModel: string; // bare name sent upstream e.g. "scripted"
   provider: ProviderRecord;
+  /** A model profile (personality): system prompt + default advanced params. */
+  profile?: { systemPrompt: string | null; params: Record<string, unknown> | null };
 }
 
 export class UnknownModelError extends ProviderError {
@@ -74,14 +76,51 @@ export class ChatService {
   ) {}
 
   route(wireModel: string): ResolvedRoute {
-    const resolved = this.providerStore.resolveModel(wireModel);
-    if (!resolved) throw new UnknownModelError(wireModel);
+    // A model PROFILE (mp_…) resolves to its wrapped base with the persona
+    // attached; profiles may wrap profiles — the innermost persona wins.
+    let profile = this.providerStore.profileById(wireModel);
+    let target: string = profile !== undefined ? profile.baseModelId : wireModel;
+    for (let depth = 0; depth < 4; depth++) {
+      const next = this.providerStore.profileById(target);
+      if (next === undefined) break;
+      profile = next;
+      target = next.baseModelId;
+    }
+    const resolved = this.providerStore.resolveModel(target);
+    if (!resolved) throw new UnknownModelError(target);
     const provider = this.providerStore.record(resolved.providerId, { withKey: true });
-    if (!provider || !provider.enabled) throw new UnknownModelError(wireModel);
+    if (!provider || !provider.enabled) throw new UnknownModelError(target);
     const upstreamModel = resolved.modelId.includes("/")
       ? resolved.modelId.split("/").slice(1).join("/")
       : resolved.modelId;
-    return { runModelId: resolved.modelId, upstreamModel, provider };
+    return {
+      runModelId: wireModel,
+      upstreamModel,
+      provider,
+      ...(profile !== undefined
+        ? { profile: { systemPrompt: profile.systemPrompt, params: profile.params } }
+        : {}),
+    };
+  }
+
+  /**
+   * The profile's persona: PREPEND its system prompt before any existing
+   * system turn (the caller's instructions stay in charge; personality sits
+   * in front of them, or becomes one when the caller sent none).
+   */
+  static withSystemPrompt(messages: Message[], systemPrompt: string | null | undefined): Message[] {
+    if (systemPrompt === undefined || systemPrompt === null || systemPrompt.trim().length === 0) return messages;
+    // The persona: PREPEND it (the system turn sits first when the caller
+    // sent none — OpenAI's convention — and rides ahead of an existing turn).
+    const copy = [...messages];
+    const at = copy.findIndex((m) => m.role === "system");
+    if (at >= 0 && typeof copy[at]?.content === "string") {
+      const existing = copy[at] as { role: "system"; content: string };
+      copy[at] = { role: "system", content: `${systemPrompt}\n\n${existing.content}` };
+    } else {
+      copy.unshift({ role: "system", content: systemPrompt });
+    }
+    return copy;
   }
 
   /** Assemble OpenAI stream deltas into a canonical message + usage. */
@@ -284,10 +323,16 @@ export class ChatService {
     const route = this.route(opts.wireModel);
     const chanRun = `run:${opts.runId}`;
 
+    // The model profile wraps THIS request: its persona prepends the system
+    // turn; its advanced params are the DEFAULTS (the caller's explicit
+    // fields — passthrough/temperature/maxTokens — win).
+    const profiledMessages = ChatService.withSystemPrompt(opts.messages, route.profile?.systemPrompt);
+
     const request: ChatCompletionRequest = {
+      ...(route.profile?.params ?? {}),
       ...(opts.passthrough ?? {}),
       model: route.upstreamModel,
-      messages: opts.messages,
+      messages: profiledMessages,
       stream: true,
       stream_options: { include_usage: true },
       ...(opts.tools !== undefined ? { tools: opts.tools } : {}),

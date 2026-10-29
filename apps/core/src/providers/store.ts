@@ -1,7 +1,8 @@
-import { and, eq, like, sql } from "drizzle-orm";
+import { and, desc, eq, like, sql } from "drizzle-orm";
 import type { ModelCaps } from "@foundry/protocol";
 import type { FoundryDb } from "../db/open.js";
-import { models, providers, vaultCiphertexts } from "../db/schema.js";
+import { modelProfiles, models, providers, vaultCiphertexts } from "../db/schema.js";
+import { ulid } from "../util/ulid.js";
 import type { Vault } from "../vault/vault.js";
 import type { ProviderKind, ProviderRecord } from "./types.js";
 
@@ -259,8 +260,29 @@ export class ProviderStore {
     ]);
   }
 
-  listModels() {
-    return this.dbx.db
+  listModels(): {
+    id: string;
+    providerId: string;
+    name: string;
+    context: number;
+    caps: ModelCaps;
+    priceIn: number | null;
+    priceOut: number | null;
+    enabled: boolean;
+    /** Model-profile entries carry the persona glyph. */
+    avatar?: string;
+  }[] {
+    const rows: {
+      id: string;
+      providerId: string;
+      name: string;
+      context: number;
+      caps: ModelCaps;
+      priceIn: number | null;
+      priceOut: number | null;
+      enabled: boolean;
+      avatar?: string;
+    }[] = this.dbx.db
       .select({
         id: models.id,
         providerId: models.providerId,
@@ -273,5 +295,90 @@ export class ProviderStore {
       })
       .from(models)
       .all();
+    // Model profiles ride the same list: each is a selectable model wrapping
+    // a base catalog entry with a persona (system prompt) + default params.
+    const profiles = this.dbx.db
+      .select()
+      .from(modelProfiles)
+      .where(eq(modelProfiles.enabled, true))
+      .all();
+    for (const p of profiles) {
+      const base = rows.find((m) => m.id === p.baseModelId);
+      rows.push({
+        id: p.id,
+        providerId: base?.providerId ?? "profile",
+        name: p.name,
+        context: base?.context ?? 8192,
+        caps: base?.caps ?? { vision: false, tools: true, reasoning: false, json: false },
+        priceIn: base?.priceIn ?? null,
+        priceOut: base?.priceOut ?? null,
+        enabled: true,
+        ...(p.avatar !== null && p.avatar !== undefined ? { avatar: p.avatar } : {}),
+      });
+    }
+    return rows;
+  }
+
+  // -- model profiles (personality/persona pages) -------------------------------
+
+  listProfiles() {
+    return this.dbx.db.select().from(modelProfiles).orderBy(desc(modelProfiles.createdAt)).all();
+  }
+
+  profileById(id: string) {
+    return this.dbx.db.select().from(modelProfiles).where(eq(modelProfiles.id, id)).get() ?? undefined;
+  }
+
+  /** Patch semantics per field: absent = untouched; explicit "" = cleared. */
+  upsertProfile(input: {
+    id?: string;
+    userId: string;
+    /** Required for a CREATE; absent on a PATCH keeps the stored base. */
+    baseModelId?: string;
+    /** Required for a CREATE; absent on a PATCH keeps the stored name. */
+    name?: string;
+    avatar?: string | null;
+    systemPrompt?: string | null;
+    params?: Record<string, unknown> | null;
+  }): { id: string; created: boolean } {
+    if (input.id !== undefined && input.id.length > 0) {
+      const existing = this.dbx.db.select().from(modelProfiles).where(eq(modelProfiles.id, input.id)).get();
+      if (existing) {
+        const patch: Partial<typeof modelProfiles.$inferInsert> = {};
+        if (input.baseModelId !== undefined) patch.baseModelId = input.baseModelId;
+        if (input.name !== undefined && input.name.trim().length > 0) patch.name = input.name.trim();
+        if (input.avatar !== undefined) patch.avatar = input.avatar && input.avatar.length > 0 ? input.avatar : null;
+        if (input.systemPrompt !== undefined) patch.systemPrompt = input.systemPrompt && input.systemPrompt.length > 0 ? input.systemPrompt : null;
+        if (input.params !== undefined) patch.params = input.params !== null && Object.keys(input.params).length > 0 ? input.params : null;
+        if (Object.keys(patch).length > 0) {
+          this.dbx.db.update(modelProfiles).set(patch).where(eq(modelProfiles.id, input.id)).run();
+        }
+        return { id: input.id, created: false };
+      }
+    }
+    const id = input.id && input.id.length > 0 ? input.id : `mp_${ulid()}`;
+    if (input.baseModelId === undefined || input.baseModelId.length === 0 || input.name === undefined || input.name.trim().length === 0) {
+      throw new Error("profile create requires baseModelId + name");
+    }
+    this.dbx.db
+      .insert(modelProfiles)
+      .values({
+        id,
+        userId: input.userId,
+        baseModelId: input.baseModelId,
+        name: input.name.trim(),
+        avatar: input.avatar && input.avatar.length > 0 ? input.avatar : null,
+        systemPrompt: input.systemPrompt && input.systemPrompt.length > 0 ? input.systemPrompt : null,
+        params: input.params !== null && input.params !== undefined && Object.keys(input.params).length > 0 ? input.params : null,
+        enabled: true,
+        createdAt: Date.now(),
+      })
+      .run();
+    return { id, created: true };
+  }
+
+  removeProfile(id: string): boolean {
+    const res = this.dbx.db.delete(modelProfiles).where(eq(modelProfiles.id, id)).run();
+    return (res.changes ?? 0) > 0;
   }
 }

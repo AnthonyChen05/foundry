@@ -207,7 +207,9 @@ key from the admin UI → API keys): Open WebUI, Cherry Studio, LM Studio,
 
 | Symptom | Cause + fix |
 |---|---|
-| `healthz` ok; agent run hangs/`failed: open-terminal container exited during startup` | the OT container died at boot — `docker logs <container>`; on Docker Desktop the allowlist firewall fails (`Can't open socket to ipset`) → `FOUNDRY_SANDBOX_EGRESS=open` |
+| Symptom | Cause + fix |
+|---|---|
+| `failed: open-terminal container exited during startup (exit code 1 …): iptables … ipset` | the sandbox image's firewall can't install on this kernel (Docker Desktop lacks ipset) → set `FOUNDRY_SANDBOX_EGRESS=auto` (launch with a fallback to open + a loud warn) or `open` directly; Linux homelabs keep `allowlist` |
 | `failed: open-terminal container did not become ready` (compose; the sandbox container is Up) | a containerized core can't reach the sandbox's mapped port as 127.0.0.1 — set `FOUNDRY_SANDBOX_OT_HOST=host.docker.internal` (the compose file does) |
 | published port answers nothing (curl empty reply) but the container is `healthy` | the containerized core bound `FOUNDRY_HOST=127.0.0.1` — in-container loopback only; set `FOUNDRY_HOST=0.0.0.0` (the compose file does) |
 | sandbox container `failed to create: bind source not found` | compose path trap (§1.1): the data dir must exist at the SAME host path as in-container (`/srv/foundry` both) |

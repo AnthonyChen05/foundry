@@ -655,6 +655,13 @@ export class WsHub {
     if (model === undefined || model.length === 0) {
       throw errOf("bad_request", "no model: pass model or create the chat with one");
     }
+    // Fail fast on an unresolvable model (deleted profile, renamed provider):
+    // the rejection precedes persistence, like the limits' denials.
+    try {
+      this.deps.chat.route(model);
+    } catch (err) {
+      throw errOf("not_found", err instanceof Error ? err.message : `unknown model: ${model}`);
+    }
 
     const agentRun = p.agent?.enabled === true;
     if (agentRun && this.deps.agents === undefined) {
@@ -788,11 +795,13 @@ function mToProtocolModel(m: {
   priceIn: number | null;
   priceOut: number | null;
   enabled: boolean;
+  avatar?: string;
 }): Record<string, unknown> {
   return {
     id: m.id,
     provider: m.providerId,
     name: m.name,
+    ...(m.avatar !== undefined ? { avatar: m.avatar } : {}),
     caps: m.caps,
     context: m.context,
     ...(m.priceIn !== null ? { priceInPerMtok: m.priceIn } : {}),

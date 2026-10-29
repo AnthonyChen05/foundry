@@ -11,13 +11,16 @@
   ],
   "properties": {
     "id": {
-      "description": "Catalog id \"<provider>/<model>\", e.g. \"ollama/llama3.1:8b\".",
+      "description": "Catalog id \"<provider>/<model>\", e.g. \"ollama/llama3.1:8b\" — a model PROFILE id (mp_…, a persona wrapping a base model) resolves the same way.",
       "type": "string"
     },
     "provider": {
       "type": "string"
     },
     "name": {
+      "type": "string"
+    },
+    "avatar": {
       "type": "string"
     },
     "caps": {

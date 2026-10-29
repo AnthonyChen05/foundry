@@ -477,6 +477,34 @@ pre {
   word-break: break-all;
 }
 
+/* Model-pages editor (Settings → Models): a raised editor card + a compact
+   params grid. */
+.formcard {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.formcard .edhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.formcard .pgrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  max-width: 640px;
+}
+
+.formcard .pgrid > input,
+.formcard .pgrid > textarea {
+  max-width: none;
+}
+
 /* -- tables --------------------------------------------------------------------- */
 
 table {

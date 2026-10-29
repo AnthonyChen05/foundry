@@ -3,9 +3,10 @@
   import { rest } from "$lib/foundry.svelte";
   import type { McpServerConfig } from "@foundry/sdk-ts";
 
-  type Tab = "providers" | "keys" | "account" | "schedules" | "hooks" | "mcp" | "system";
+  type Tab = "providers" | "models" | "keys" | "account" | "schedules" | "hooks" | "mcp" | "system";
   const TABS: { id: Tab; label: string }[] = [
     { id: "providers", label: "Providers" },
+    { id: "models", label: "Models" },
     { id: "keys", label: "API keys" },
     { id: "account", label: "Account" },
     { id: "schedules", label: "Schedules" },
@@ -32,6 +33,13 @@
       case "providers":
         providers = (await rest().adminListProviders()).providers;
         break;
+      case "models": {
+        const [p, cat] = await Promise.all([rest().adminListProfiles(), rest().models()]);
+        profiles = p.profiles;
+        // The wrap targets = the RAW catalog (profiles excluded).
+        catModels = cat.data.filter((m) => !m.id.startsWith("mp_")).map((m) => ({ id: m.id, name: m.name, avatar: m.avatar }));
+        break;
+      }
       case "keys":
         keys = (await rest().adminListKeys()).keys;
         break;
@@ -114,6 +122,104 @@
   function delProvider(id: string): void {
     void run(async (refresh) => {
       await rest().adminDeleteProvider(id);
+      await refresh();
+    });
+  }
+
+  // -- model profiles (personality pages; select like any model) -------------
+
+  interface ModelRow {
+    id: string;
+    name: string;
+    avatar?: string;
+  }
+
+  interface ProfileRow {
+    id: string;
+    userId: string;
+    baseModelId: string;
+    name: string;
+    avatar?: string | null;
+    systemPrompt?: string | null;
+    params?: Record<string, unknown> | null;
+    enabled: boolean;
+    createdAt: number;
+  }
+
+  let profiles = $state<ProfileRow[]>([]);
+  let catModels = $state<ModelRow[]>([]);
+
+  let editingId = $state(""); // "" = create
+  let eName = $state("");
+  let eAvatar = $state("");
+  let eBase = $state("");
+  let eSystem = $state("");
+  let eTemp = $state("");
+  let eTopP = $state("");
+  let eMaxTokens = $state("");
+  let ePresence = $state("");
+  let eFrequency = $state("");
+  let eSeed = $state("");
+  let eStop = $state(""); // stop sequences — one per line
+
+  function numParam(s: string): number | undefined {
+    const t = s.trim();
+    if (t.length === 0) return undefined;
+    const n = Number(t);
+    return Number.isFinite(n) ? n : undefined;
+  }
+
+  const paramText = (v: unknown): string => (typeof v === "number" ? String(v) : "");
+
+  function editProfile(p?: ProfileRow): void {
+    editingId = p?.id ?? "";
+    eName = p?.name ?? "";
+    eAvatar = p?.avatar ?? "";
+    eBase = p?.baseModelId ?? "";
+    eSystem = p?.systemPrompt ?? "";
+    const params = p?.params ?? undefined;
+    eTemp = paramText(params?.["temperature"]);
+    eTopP = paramText(params?.["top_p"]);
+    eMaxTokens = paramText(params?.["max_tokens"]);
+    ePresence = paramText(params?.["presence_penalty"]);
+    eFrequency = paramText(params?.["frequency_penalty"]);
+    eSeed = paramText(params?.["seed"]);
+    const stop = params?.["stop"];
+    eStop = Array.isArray(stop) ? stop.filter((s) => typeof s === "string").join("\n") : typeof stop === "string" ? stop : "";
+  }
+
+  function saveProfile(): void {
+    void run(async (refresh) => {
+      if (eBase === "") throw new Error("pick a base model");
+      if (eName.trim().length === 0) throw new Error("name required");
+      const params: Record<string, unknown> = {};
+      if (eTemp.trim() !== "") params["temperature"] = numParam(eTemp);
+      if (eTopP.trim() !== "") params["top_p"] = numParam(eTopP);
+      if (eMaxTokens.trim() !== "") params["max_tokens"] = numParam(eMaxTokens);
+      if (ePresence.trim() !== "") params["presence_penalty"] = numParam(ePresence);
+      if (eFrequency.trim() !== "") params["frequency_penalty"] = numParam(eFrequency);
+      if (eSeed.trim() !== "") params["seed"] = numParam(eSeed);
+      if (eStop.trim() !== "") {
+        const stops = eStop.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
+        params["stop"] = stops.length === 1 ? stops[0] : stops;
+      }
+      await rest().adminUpsertProfile({
+        ...(editingId !== "" ? { id: editingId } : {}),
+        baseModelId: eBase,
+        name: eName.trim(),
+        ...(eAvatar.trim() !== "" ? { avatar: eAvatar.trim() } : {}),
+        ...(eSystem.trim() !== "" ? { systemPrompt: eSystem } : {}),
+        params: Object.keys(params).length > 0 ? params : null,
+      });
+      editProfile(undefined);
+      await refresh();
+    });
+  }
+
+  function delProfile(id: string): void {
+    void run(async (refresh) => {
+      await rest().adminDeleteProfile(id);
+      if (editingId === id) editProfile(undefined);
       await refresh();
     });
   }
@@ -354,6 +460,73 @@
             </tr>
           {:else}
             <tr><td colspan="5" class="muted">No providers yet.</td></tr>
+          {/each}
+        </tbody>
+      </table>
+    {:else if tab === "models"}
+      <!-- The personality editor: a profile wraps a base model with a
+           persona + default advanced params, selectable everywhere. -->
+      <div class="form formcard">
+        <div class="edhead">
+          <strong>{editingId === "" ? "New model page" : `Model page${eAvatar !== "" ? ` ${eAvatar}` : ""} ${eName}`}</strong>
+          <button class="ghost" onclick={() => editProfile(undefined)} type="button">new page</button>
+        </div>
+        <div class="field">
+          <label for="mp-name">name</label>
+          <input id="mp-name" bind:value={eName} />
+        </div>
+        <div class="field">
+          <label for="mp-avatar">avatar (emoji)</label>
+          <input id="mp-avatar" bind:value={eAvatar} maxlength="4" />
+        </div>
+        <div class="field">
+          <label for="mp-base">base model</label>
+          <select id="mp-base" bind:value={eBase}>
+            <option value="">— pick a base —</option>
+            {#each catModels as m (m.id)}
+              <option value={m.id}>{m.avatar ?? ""} {m.name} ({m.id})</option>
+            {/each}
+          </select>
+        </div>
+        <div class="field">
+          <label for="mp-sys">system prompt — the personality it answers as</label>
+          <textarea id="mp-sys" rows="6" bind:value={eSystem}></textarea>
+        </div>
+        <div class="field">
+          <!-- @svelte-ignore a11y_label_has_associated_control: a heading-style label over a param GRID -->
+          <label>advanced params (defaults — a request's explicit values win)</label>
+          <div class="pgrid">
+            <input placeholder="temperature" bind:value={eTemp} />
+            <input placeholder="top_p" bind:value={eTopP} />
+            <input placeholder="max_tokens" bind:value={eMaxTokens} />
+            <input placeholder="presence_penalty" bind:value={ePresence} />
+            <input placeholder="frequency_penalty" bind:value={eFrequency} />
+            <input placeholder="seed" bind:value={eSeed} />
+            <textarea placeholder="stop — one per line" rows="2" bind:value={eStop}></textarea>
+          </div>
+        </div>
+        <div class="inline">
+          <button class="primary" onclick={saveProfile} disabled={busy || eName.trim() === "" || eBase === ""}>
+            {editingId === "" ? "Create" : "Save"}
+          </button>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>page</th><th>name</th><th>base</th><th>id</th><th></th></tr></thead>
+        <tbody>
+          {#each profiles as p (p.id)}
+            <tr>
+              <td>{p.avatar ?? ""}</td>
+              <td>{p.name}{p.enabled ? "" : " (off)"}</td>
+              <td class="mono">{p.baseModelId}</td>
+              <td class="mono">{p.id}</td>
+              <td>
+                <button class="ghost" onclick={() => editProfile(p)}>edit</button>
+                <button class="ghost" onclick={() => delProfile(p.id)}>delete</button>
+              </td>
+            </tr>
+          {:else}
+            <tr><td colspan="5" class="muted">No model pages yet — the chat picker lists raw provider models.</td></tr>
           {/each}
         </tbody>
       </table>

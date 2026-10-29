@@ -1,6 +1,6 @@
 import Dockerode from "dockerode";
-import { type Readable } from "node:stream";
 import { mkdirSync } from "node:fs";
+import { type Readable } from "node:stream";
 import { dirname } from "node:path";
 import type { AppConfig } from "../config.js";
 import { OtClient, OT_MOUNT_ROOT, BASE64_CHUNK, type OtExecStatus } from "./ot.js";
@@ -49,10 +49,59 @@ export class DockerLauncher {
   constructor(
     private readonly config: Pick<
       AppConfig,
-      "sandboxImage" | "sandboxRuntime" | "sandboxOtHost"
+      "sandboxImage" | "sandboxRuntime" | "sandboxOtHost" | "sandboxEgress"
     >,
+    private readonly log?: { warn: (obj: object, msg?: string) => void },
   ) {
     this.docker = new Dockerode();
+  }
+
+  /** Launch the OT container once with the given env. */
+  private async launchOnce(
+    opts: CreateEnvOpts & { apiKey: string },
+    envEntries: string[],
+  ): Promise<Omit<EnvHandle, "driver"> & { ot: OtClient; hostPort: number }> {
+    const image = opts.image ?? this.config.sandboxImage;
+    await this.pullIfMissing(image);
+    const caps = { ...{ cpus: 2, memMib: 1024, pids: 256 }, ...(opts.caps ?? {}) };
+    const hostPort = await freeTcpPort();
+    const container = await this.docker.createContainer({
+      Image: image,
+      Cmd: ["run"],
+      ExposedPorts: { "8000/tcp": {} },
+      Env: [...envEntries, `OPEN_TERMINAL_API_KEY=${opts.apiKey}`],
+      Labels: { "foundry.sandbox": "1", ...(opts.labels ?? {}) },
+      HostConfig: {
+        PortBindings: { "8000/tcp": [{ HostIp: "127.0.0.1", HostPort: String(hostPort) }] },
+        Binds: [`${opts.workspaceDir}:${OT_MOUNT_ROOT}`],
+        Memory: caps.memMib * 1024 * 1024,
+        NanoCpus: Math.round(caps.cpus * 1e9),
+        PidsLimit: caps.pids,
+        CapDrop: ["ALL"],
+        // OT's entrypoint runs as `user` and escalates via passwordless sudo
+        // for its egress firewall bootstrap; SETUID/SETGID are the minimal
+        // caps sudo needs. OT itself drops NET_ADMIN after setup (capsh).
+        CapAdd: ["SETUID", "SETGID", "NET_ADMIN"], // then drops NET_ADMIN
+        ExtraHosts: ["host.docker.internal:host-gateway"],
+        AutoRemove: false,
+        ...DockerLauncher.runtimeField(this.config.sandboxRuntime),
+      },
+    });
+    await container.start();
+    // Reach the mapped port via the configured host: 127.0.0.1 when the core
+    // runs on the daemon's host; host.docker.internal when core itself is a
+    // container (the sibling publishes to the HOST's loopback, not ours).
+    const ot = new OtClient(`http://${this.config.sandboxOtHost}:${hostPort}`, opts.apiKey);
+    await this.awaitOtReady(container, ot, image);
+    mkdirSync(opts.workspaceDir, { recursive: true });
+    return {
+      envId: `docker-${container.id}`,
+      containerRef: container.id,
+      workspaceDir: opts.workspaceDir,
+      env: { ...(opts.env ?? {}) },
+      ot,
+      hostPort,
+    };
   }
 
   async daemonReachable(): Promise<boolean> {
@@ -83,54 +132,47 @@ export class DockerLauncher {
   }
 
   /**
-   * Launch an OT container for a workspace. Returns the handle + the OT
-   * client (reachable at 127.0.0.1:<hostPort>).
+   * Launch an OT container for a workspace, with the OT client (reachable at
+   * {sandboxOtHost}:<hostPort>).
+   *
+   * Egress "auto": attempt the DNS allowlist firewall (OPEN_TERMINAL_ALLOWED_
+   * DOMAINS rides in opts.env); when the container dies at bootstrap with the
+   * kernel firewall signature (Docker Desktop's VM lacks ipset), relaunch
+   * WITHOUT the firewall and warn loudly — the egress credential proxy still
+   * holds every esc_→real-key swap (ADR-005). Explicit "allowlist" never
+   * falls back: an operator who demanded the deny must see the launch fail.
    */
   async launchOt(opts: CreateEnvOpts & { apiKey: string }): Promise<Omit<EnvHandle, "driver"> & { ot: OtClient }> {
-    const image = opts.image ?? this.config.sandboxImage;
-    await this.pullIfMissing(image);
-    const caps = { ...{ cpus: 2, memMib: 1024, pids: 256 }, ...(opts.caps ?? {}) };
-    const hostPort = await freeTcpPort();
-    const workspaceDir = opts.workspaceDir;
-    mkdirSync(workspaceDir, { recursive: true });
-    // guardrail #3: caps + no docker socket + only the workspace volume.
-    const envEntries = Object.entries(opts.env ?? {}).map(([k, v]) => `${k}=${v}`);
-    envEntries.push(`OPEN_TERMINAL_API_KEY=${opts.apiKey}`);
-    const container = await this.docker.createContainer({
-      Image: image,
-      Cmd: ["run"],
-      ExposedPorts: { "8000/tcp": {} },
-      Env: envEntries,
-      Labels: { "foundry.sandbox": "1", ...(opts.labels ?? {}) },
-      HostConfig: {
-        PortBindings: { "8000/tcp": [{ HostIp: "127.0.0.1", HostPort: String(hostPort) }] },
-        Binds: [`${workspaceDir}:${OT_MOUNT_ROOT}`],
-        Memory: caps.memMib * 1024 * 1024,
-        NanoCpus: Math.round(caps.cpus * 1e9),
-        PidsLimit: caps.pids,
-        CapDrop: ["ALL"],
-        // OT's entrypoint runs as `user` and escalates via passwordless sudo
-        // for its egress firewall bootstrap; SETUID/SETGID are the minimal
-        // caps sudo needs. OT itself drops NET_ADMIN after setup (capsh).
-        CapAdd: ["SETUID", "SETGID", "NET_ADMIN"], // then drops NET_ADMIN
-        ExtraHosts: ["host.docker.internal:host-gateway"],
-        AutoRemove: false,
-        ...DockerLauncher.runtimeField(this.config.sandboxRuntime),
-      },
-    });
-    await container.start();
-    // Reach the mapped port via the configured host: 127.0.0.1 when the core
-    // runs on the daemon's host; host.docker.internal when core itself is a
-    // container (the sibling publishes to the HOST's loopback, not ours).
-    const ot = new OtClient(`http://${this.config.sandboxOtHost}:${hostPort}`, opts.apiKey);
-    await this.awaitOtReady(container, ot, image);
-    return {
-      envId: `docker-${container.id}`,
-      containerRef: container.id,
-      workspaceDir,
-      env: { ...(opts.env ?? {}) },
-      ot,
-    };
+    const baseEnv = Object.entries(opts.env ?? {}).map(([k, v]) => `${k}=${v}`);
+    try {
+      return await this.launchOnce(opts, baseEnv);
+    } catch (err) {
+      // The fallback needs: auto mode + an ATTEMPTED firewall (the var was
+      // carried in env) + a firewall-shaped failure. Without the var there's
+      // nothing to strip (explicit open runs, the runner's local envs).
+      if (
+        this.config.sandboxEgress !== "auto" ||
+        (opts.env ?? {})["OPEN_TERMINAL_ALLOWED_DOMAINS"] === undefined ||
+        !this.firewallFailure(err)
+      ) {
+        throw err;
+      }
+      const withoutFirewall = Object.entries(opts.env ?? {})
+        .filter(([k]) => k !== "OPEN_TERMINAL_ALLOWED_DOMAINS")
+        .map(([k, v]) => `${k}=${v}`);
+      this.log?.warn(
+        { mod: "sandbox", image: opts.image ?? this.config.sandboxImage },
+        "OT egress firewall failed to install on this kernel — falling back to OPEN egress (the gateway's credential proxy still guards LLM traffic; set FOUNDRY_SANDBOX_EGRESS=open or allowlist to pin this explicitly)",
+      );
+      const retried = await this.launchOnce(opts, withoutFirewall);
+      const envNoFirewall = { ...(opts.env ?? {}) };
+      delete envNoFirewall["OPEN_TERMINAL_ALLOWED_DOMAINS"];
+      return { ...retried, env: envNoFirewall };
+    }
+  }
+
+  private firewallFailure(err: unknown): boolean {
+    return err instanceof SandboxError && /ipset|iptables|nf_tables|firewall/i.test(err.message);
   }
 
   /**
@@ -153,9 +195,13 @@ export class DockerLauncher {
         .then((i) => i.State)
         .catch(() => undefined);
       if (state !== undefined && state.Running !== true) {
+        // Grab the boots log BEFORE the removal: the error is what the
+        // operator sees in the run's timeline, and it should carry the
+        // container's own last words (firewall/ipset signature etc.).
+        const tail = await this.containerLogTail(container).catch(() => "");
         await container.remove({ force: true }).catch(() => {});
         throw new SandboxError(
-          `open-terminal container exited during startup (exit code ${state.ExitCode ?? "?"}, image ${image})`,
+          `open-terminal container exited during startup (exit code ${state.ExitCode ?? "?"}, image ${image})${tail.length > 0 ? `: ${tail}` : ""}`,
           502,
         );
       }
@@ -163,8 +209,53 @@ export class DockerLauncher {
     }
     const probe = await ot.listDir("/").catch(() => undefined);
     if (probe === undefined) {
+      const tail = await this.containerLogTail(container).catch(() => "");
       await container.remove({ force: true }).catch(() => {});
-      throw new SandboxError(`open-terminal container did not become ready (image ${image})`, 502);
+      throw new SandboxError(
+        `open-terminal container did not become ready (image ${image})${tail.length > 0 ? `: ${tail}` : ""}`,
+        502,
+      );
+    }
+  }
+
+  /**
+   * The container's last log lines. Docker stream frames carry an 8-byte
+   * header (stream id + payload size); strip them directly rather than
+   * trusting modem demux across daemon versions, and keep only the LAST
+   * lines — the failure reason is the exit's last words.
+   */
+  private async containerLogTail(container: Dockerode.Container, lines = 10): Promise<string> {
+    try {
+      const result = await container.logs({ stdout: true, stderr: true, tail: lines + 30, follow: false });
+      const parts: Buffer[] = Buffer.isBuffer(result) ? [result] : [];
+      if (parts.length === 0) {
+        const stream = result as unknown as Readable;
+        await new Promise<void>((resolve) => {
+          stream.on("data", (c: Buffer) => parts.push(c));
+          stream.on("end", () => resolve());
+          stream.on("error", () => resolve());
+        });
+      }
+      let text = "";
+      for (const b of parts) {
+        let i = 0;
+        while (i < b.length && b.length - i >= 8) {
+          const kind = b[i] as number;
+          const size = b.readUInt32BE(i + 4);
+          if (kind > 2 || b.length - i - 8 < size) break; // not framed (or a tail truncation) — stop
+          text += b.slice(i + 8, i + 8 + size).toString("utf8");
+          i += 8 + size;
+        }
+      }
+      return text
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0)
+        .slice(-lines)
+        .join("\n")
+        .slice(-600);
+    } catch {
+      return "";
     }
   }
 }
@@ -195,8 +286,11 @@ export class OpenTerminalDriver implements SandboxDriver {
   /** envId → live client + container id (in-memory; DB rows are service-level). */
   private readonly live = new Map<string, { ot: OtClient; containerId: string; workspaceDir: string }>();
 
-  constructor(config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime" | "sandboxOtHost">) {
-    this.launcher = new DockerLauncher(config);
+  constructor(
+    config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime" | "sandboxOtHost" | "sandboxEgress">,
+    log?: { warn: (obj: object, msg?: string) => void },
+  ) {
+    this.launcher = new DockerLauncher(config, log);
   }
 
   async daemonReachable(): Promise<boolean> {
@@ -370,12 +464,12 @@ export class OpenTerminalDriver implements SandboxDriver {
 export class DockerDriver implements SandboxDriver {
   readonly name = "docker" as const;
   private readonly launcher: DockerLauncher;
-  private readonly config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime" | "sandboxOtHost">;
+  private readonly config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime" | "sandboxOtHost" | "sandboxEgress">;
   private readonly live = new Map<string, { containerId: string; workspaceDir: string }>();
 
-  constructor(config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime" | "sandboxOtHost">) {
+  constructor(config: Pick<AppConfig, "sandboxImage" | "sandboxRuntime" | "sandboxOtHost" | "sandboxEgress">, log?: { warn: (obj: object, msg?: string) => void }) {
     this.config = config;
-    this.launcher = new DockerLauncher(config);
+    this.launcher = new DockerLauncher(config, log);
   }
 
   async daemonReachable(): Promise<boolean> {

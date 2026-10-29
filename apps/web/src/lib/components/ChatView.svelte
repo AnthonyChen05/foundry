@@ -20,7 +20,7 @@
 
   const POLICIES = ["ask", "always", "session", "deny"] as const;
 
-  let models = $state<{ id: string; name: string }[]>([]);
+  let models = $state<{ id: string; name: string; avatar?: string }[]>([]);
   let modelChoice = $state("");
   let menuOpen = $state(false);
   let agent = $state(false);
@@ -41,7 +41,7 @@
       rest()
         .models()
         .then((res) => {
-          models = res.data.map((m) => ({ id: m.id, name: m.name }));
+          models = res.data.map((m) => ({ id: m.id, name: m.name, ...(m.avatar !== undefined ? { avatar: m.avatar } : {}) }));
         })
         .catch(() => {
           /* picker stays empty */
@@ -117,7 +117,8 @@
 
   function modelLabel(id: string): string {
     const m = models.find((x) => x.id === id);
-    return m !== undefined && m.name.length > 0 ? m.name : id;
+    if (m === undefined) return id;
+    return `${m.avatar ?? ""}${m.avatar !== undefined && m.avatar.length > 0 ? " " : ""}${m.name.length > 0 ? m.name : id}`;
   }
 
   function pickModel(id: string): void {
@@ -304,7 +305,7 @@
           </button>
           {#each models as m (m.id)}
             <button role="menuitem" onclick={() => pickModel(m.id)} class:check={modelChoice === m.id}>
-              <span>{m.name}</span>
+              <span>{m.avatar ?? ""}{m.avatar !== undefined && m.avatar.length > 0 ? " " : ""}{m.name}</span>
               <span class="mid">{m.id}</span>
               {#if modelChoice === m.id}<span class="tick">✓</span>{/if}
             </button>

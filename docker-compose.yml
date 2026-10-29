@@ -36,8 +36,12 @@ services:
       # ntfy (optional): fill both, or `docker compose --profile push up -d`.
       FOUNDRY_NTFY_URL: ${FOUNDRY_NTFY_URL:-}
       FOUNDRY_NTFY_TOPIC: ${FOUNDRY_NTFY_TOPIC:-}
-      # Allowlist = OT's DNS firewall (Linux: works; Docker Desktop: set open).
-      FOUNDRY_SANDBOX_EGRESS: ${FOUNDRY_SANDBOX_EGRESS:-allowlist}
+      # auto: attempt OT's DNS firewall; on kernels that can't install it
+      # (Docker Desktop) fall back to OPEN egress with a loud warn — the
+      # gateway's credential proxy still guards all LLM traffic. Pin
+      # "allowlist" (strict, fails on no-ipset kernels) or "open" if you
+      # want a fixed mode.
+      FOUNDRY_SANDBOX_EGRESS: ${FOUNDRY_SANDBOX_EGRESS:-auto}
       FOUNDRY_LOG_LEVEL: ${FOUNDRY_LOG_LEVEL:-info}
       # The default sandbox image is the full toolkit (python3 etc.) so the
       # acceptance scenario runs; switch to :slim for a smaller footprint.

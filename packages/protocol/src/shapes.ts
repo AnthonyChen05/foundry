@@ -155,10 +155,12 @@ export type ModelCaps = Static<typeof ModelCapsSchema>;
 export const ModelSchema = Type.Object(
   {
     id: Type.String({
-      description: 'Catalog id "<provider>/<model>", e.g. "ollama/llama3.1:8b".',
+      description: 'Catalog id "<provider>/<model>", e.g. "ollama/llama3.1:8b" — a model PROFILE id (mp_…, a persona wrapping a base model) resolves the same way.',
     }),
     provider: Type.String(),
     name: Type.String(),
+    /** Profile display glyph (emoji) — present on model-profile entries. */
+    avatar: Type.Optional(Type.String()),
     caps: ModelCapsSchema,
     context: Type.Integer({ minimum: 1 }),
     priceInPerMtok: Type.Optional(Type.Number({ minimum: 0 })),

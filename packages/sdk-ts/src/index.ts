@@ -7,7 +7,7 @@
  * Uses only platform primitives: global fetch (Node 22+/browsers) and
  * global WebSocket (Node 22.4+/browsers).
  */
-export { FoundryClient, type McpServerConfig, type AuditEvent, type BackupResult } from "./client.js";
+export { FoundryClient, type McpServerConfig, type AuditEvent, type BackupResult, type ModelProfile } from "./client.js";
 export { FoundryError, type WSRequestError } from "./errors.js";
 export {
   FoundrySocket,

@@ -44,11 +44,12 @@ export interface AppConfig {
   /**
    * Non-LLM egress control for sandbox containers (ADR-005): "allowlist"
    * installs OT's DNS-whitelist firewall (needs a Linux kernel with ipset —
-   * Docker Desktop's VM lacks it and OT refuses to start there), "open" leaves
-   * OT unfiltered (dev-only; the egress credential proxy still guards LLM
-   * traffic). Default allowlist.
+   * it fails the launch on Docker Desktop's VM), "open" runs OT unfiltered
+   * (dev-only; the egress credential proxy still guards LLM traffic), and
+   * "auto" attempts the firewall and — when the kernel can't install it —
+   * falls back to open with a loud warn. Default allowlist.
    */
-  readonly sandboxEgress: "allowlist" | "open";
+  readonly sandboxEgress: "allowlist" | "open" | "auto";
   /**
    * Base URL injected into sandbox envs as OPENAI_BASE_URL / ANTHROPIC_BASE_
    * URL (ADR-005: envs hold an egress token, never real keys). Must be
@@ -99,6 +100,12 @@ function intEnv(env: NodeJS.ProcessEnv, name: string, def: number): number {
     throw new ConfigValidationError(`${name} must be a positive integer, got "${raw}"`);
   }
   return n;
+}
+
+/** Sandbox egress mode; unknown values fall back to the strict default. */
+function parseEgress(raw: string | undefined): "allowlist" | "open" | "auto" {
+  if (raw === "open" || raw === "auto") return raw;
+  return "allowlist";
 }
 
 /** Non-negative integer (0 allowed — knobs where 0 explicitly means "off"). */
@@ -158,7 +165,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // 127.0.0.1 = core on the host. Containerized core (compose): the host
     // gateway, since the sibling container publishes to the HOST's loopback.
     sandboxOtHost: env["FOUNDRY_SANDBOX_OT_HOST"]?.trim() || "127.0.0.1",
-    sandboxEgress: env["FOUNDRY_SANDBOX_EGRESS"]?.trim() === "open" ? "open" : "allowlist",
+    sandboxEgress: parseEgress(env["FOUNDRY_SANDBOX_EGRESS"]?.trim()),
     egressBaseUrl: env["FOUNDRY_EGRESS_BASE_URL"]?.trim() || `http://host.docker.internal:${port}/v1/egress`,
   };
 }

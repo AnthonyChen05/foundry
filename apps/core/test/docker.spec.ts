@@ -137,7 +137,7 @@ d("Open Terminal sandbox (real container)", () => {
     // window polling a dead endpoint (run-liveness.spec.ts locks the run
     // level; this locks the driver level).
     const image = process.env.FOUNDRY_SANDBOX_IMAGE ?? "ghcr.io/open-webui/open-terminal:latest";
-    const launcher = new DockerLauncher({ sandboxImage: image, sandboxRuntime: "runc", sandboxOtHost: "127.0.0.1" });
+    const launcher = new DockerLauncher({ sandboxImage: image, sandboxRuntime: "runc", sandboxOtHost: "127.0.0.1", sandboxEgress: EGRESS_OPEN ? "open" : "auto" });
     await launcher.pullIfMissing(image);
     const container = await launcher.docker.createContainer({ Image: image, Cmd: ["sh", "-c", "exit 1"] });
     const ot = new OtClient("http://127.0.0.1:1", "probe");
@@ -152,4 +152,22 @@ d("Open Terminal sandbox (real container)", () => {
       return launcher.docker.getImage(container.id).inspect().then(() => false, () => true);
     }, "dead container removed", 5000);
   }, 60_000);
+
+  it("egress auto: allowlist when the kernel has ipset; open fallback (with the log tail in the error) when it doesn't", async () => {
+    const c = await startServer({ sandboxDriver: "auto", sandboxEgress: "auto" });
+    const uid = c.server.rt.auth.verifyToken(c.server.token)?.userId;
+    if (uid === undefined) throw new Error("no uid");
+    const env = await c.server.rt.sandbox.ensureEnv(uid);
+    const containerRef = env.containerRef ?? "";
+    expect(containerRef.length).toBeGreaterThan(0);
+    // what the launch actually shipped: with a working firewall the var
+    // rides; where it can't install (Docker Desktop), the fallback relaunched
+    // WITHOUT it — either outcome = a READY env + reachable OT.
+    const info = await env.driver.execShell(env.envId, "env | grep OPEN_TERMINAL_ALLOWED_DOMAINS || echo UNSET", { timeoutMs: 10_000 });
+    const envState = info.stdout.trim();
+    console.log(`egress=auto launch result: ${envState.includes("OPEN_TERMINAL_ALLOWED_DOMAINS") ? "allowlist installed" : "fallback to open"}`);
+    // and the OT server is genuinely reachable through whatever mode won
+    const probe = await env.driver.execShell(env.envId, "echo sandbox-up", { timeoutMs: 10_000 });
+    expect(probe.stdout.trim()).toBe("sandbox-up");
+  }, 90_000);
 });

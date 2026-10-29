@@ -189,7 +189,7 @@ fun ChatScreen(
                         DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
                             models.forEach { m ->
                                 DropdownMenuItem(
-                                    text = { Text(m.name.ifBlank { m.id }) },
+                                    text = { Text("${m.avatar ?: ""}${if (m.avatar != null) " " else ""}${m.name.ifBlank { m.id }}") },
                                     onClick = {
                                         model = m.id
                                         modelMenu = false

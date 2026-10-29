@@ -107,6 +107,8 @@ data class Model(
     val id: String,
     val provider: String,
     val name: String,
+    /** Model-profile persona glyph (emoji) — optional. */
+    val avatar: String? = null,
     val caps: ModelCaps? = null,
     val context: Int? = null,
     val enabled: Boolean = true,

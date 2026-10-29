@@ -164,6 +164,27 @@ export class FoundryClient {
     return this.json("DELETE", `/v1/admin/providers/${encodeURIComponent(id)}`);
   }
 
+  // -- admin: model profiles (personality pages) --------------------------------
+
+  adminListProfiles(): Promise<{ profiles: ModelProfile[] }> {
+    return this.json("GET", "/v1/admin/profiles");
+  }
+
+  adminUpsertProfile(body: {
+    id?: string;
+    baseModelId: string;
+    name: string;
+    avatar?: string;
+    systemPrompt?: string;
+    params?: Record<string, unknown> | null;
+  }): Promise<ModelProfile> {
+    return this.json("POST", "/v1/admin/profiles", body);
+  }
+
+  adminDeleteProfile(id: string): Promise<{ ok: boolean }> {
+    return this.json("DELETE", `/v1/admin/profiles/${encodeURIComponent(id)}`);
+  }
+
   adminCreateKey(name?: string): Promise<{ id: string; name: string; key: string }> {
     return this.json("POST", "/v1/admin/keys", { ...(name !== undefined ? { name } : {}) });
   }
@@ -248,6 +269,19 @@ export interface AuditEvent {
   target: string | null;
   outcome: string;
   meta?: Record<string, unknown> | null;
+}
+
+/** A model profile row (GET/POST /v1/admin/profiles) — a persona page. */
+export interface ModelProfile {
+  id: string;
+  userId: string;
+  baseModelId: string;
+  name: string;
+  avatar?: string | null;
+  systemPrompt?: string | null;
+  params?: Record<string, unknown> | null;
+  enabled: boolean;
+  createdAt: number;
 }
 
 /** POST /v1/admin/backup result. */

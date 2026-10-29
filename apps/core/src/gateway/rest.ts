@@ -212,6 +212,7 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
         name: m.name,
         context: m.context,
         caps: m.caps,
+        ...(m.avatar !== undefined ? { avatar: m.avatar } : {}),
         ...(m.priceIn !== null ? { price_in_per_mtok: m.priceIn } : {}),
         ...(m.priceOut !== null ? { price_out_per_mtok: m.priceOut } : {}),
       })),
@@ -744,6 +745,69 @@ export function registerRest(app: FastifyInstance, deps: RestDeps): void {
       return;
     }
     deps.audit?.record({ userId: user.userId, action: "admin.hooks.delete", target: id });
+    return { ok: true };
+  });
+
+  // -- model profiles (personality pages; selects like any model) ---------------
+
+  app.get("/v1/admin/profiles", async () => {
+    return { profiles: deps.providers.listProfiles() };
+  });
+
+  app.post("/v1/admin/profiles", async (request, reply) => {
+    const body = (request.body ?? {}) as {
+      id?: string;
+      baseModelId?: string;
+      name?: string;
+      avatar?: string;
+      systemPrompt?: string;
+      params?: Record<string, unknown>;
+    };
+    const user = (request as AuthedRequest).user;
+    const patching = typeof body.id === "string" && body.id.length > 0 && deps.providers.profileById(body.id) !== undefined;
+    const base = typeof body.baseModelId === "string" ? body.baseModelId : "";
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!patching && name.length === 0) {
+      await reply.code(400).send(openAiError(400, "`name` is required", "invalid_request_error"));
+      return;
+    }
+    if (base !== "" && deps.providers.resolveModel(base) === undefined && deps.providers.profileById(base) === undefined) {
+      await reply.code(400).send(openAiError(400, `unknown base model: ${base} (see GET /v1/models)`, "invalid_request_error"));
+      return;
+    }
+    if (patching && name.length === 0) {
+      // a name-less patch keeps the stored name — the admin form always
+      // sends one; API patches may leave it
+    }
+    const { id, created } = deps.providers.upsertProfile({
+      ...(typeof body.id === "string" && body.id.length > 0 ? { id: body.id } : {}),
+      userId: user?.userId ?? "",
+      ...(base !== "" ? { baseModelId: base } : {}),
+      ...(name !== "" ? { name } : {}),
+      ...(body.avatar !== undefined ? { avatar: body.avatar } : {}),
+      ...(body.systemPrompt !== undefined ? { systemPrompt: body.systemPrompt } : {}),
+      ...(body.params !== undefined ? { params: body.params } : {}),
+    });
+    reply.code(created ? 201 : 200);
+    deps.audit?.record({
+      ...(user !== undefined ? { userId: user.userId } : {}),
+      action: "admin.profiles.upsert",
+      target: id,
+      meta: { created, base: body.baseModelId, name },
+    });
+    return deps.providers.profileById(id);
+  });
+
+  app.delete("/v1/admin/profiles/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const user = (request as AuthedRequest).user;
+    // Profiles resolve FIRST in chat routing: deleting one turns its chats
+    // into unknown-model errors the clients already render. Explicit, fine.
+    if (!deps.providers.removeProfile(id)) {
+      await reply.code(404).send(openAiError(404, "unknown profile", "not_found_error"));
+      return;
+    }
+    deps.audit?.record({ ...(user !== undefined ? { userId: user.userId } : {}), action: "admin.profiles.delete", target: id });
     return { ok: true };
   });
 
