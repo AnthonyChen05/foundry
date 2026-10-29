@@ -1,6 +1,6 @@
 {
   "name": "@foundry/desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Foundry desktop/Windows shell — Tauri wrapper over the self-hosted core and web UI",
