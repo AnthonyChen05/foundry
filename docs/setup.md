@@ -152,7 +152,11 @@ pnpm dev                # http://127.0.0.1:8787 (auto-serves the web build)
   guards ALL LLM traffic). Linux: leave the default `allowlist`.
 - Windows desktop app: `apps/desktop` (Tauri) — run its release build or
   `foundry-desktop`; first run asks for the server URL (default
-  `http://127.0.0.1:8787`).
+  `http://127.0.0.1:8787` — for a remote core use its address, e.g.
+  `http://<LAN-or-Tailscale-IP>:8787`, which requires the core to listen on a
+  non-loopback `FOUNDRY_HOST`). The setup screen reopens from the app menu
+  (**Connection → Change server…**, Ctrl+U) and whenever the saved server
+  doesn't answer at boot; `--reconfigure` still works.
 - Android: install the release APK (repo Releases tab), set the server URL on
   its login screen, sign in.
 - Local sandbox (desktop app): Settings → enable the local executor; core

@@ -4,7 +4,10 @@
 mod supervisor;
 
 use std::fs;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
+use std::time::Duration;
+use tauri::menu::{Menu, MenuItem};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 /**
@@ -19,9 +22,10 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
  * itself and gets NO shell commands (capabilities cover only the bundled
  * first-run page); the runner connection is the shell's own WS session.
  *
- * Config is one JSON file in the OS app-config dir; `--reconfigure` (or
- * deleting the file) reopens the first-run picker. Local-sandbox credentials
- * are stored in plaintext in that file (documented; same trust class as the
+ * Config is one JSON file in the OS app-config dir; the setup page reopens
+ * from the app menu ("Connection → Change server…"), automatically when the
+ * stored server doesn't answer at boot, and via `--reconfigure`.
+ * Local-sandbox credentials are stored in plaintext in that file (documented; same trust class as the
  * server's .env).
  */
 
@@ -80,6 +84,49 @@ fn open_server(app: &tauri::AppHandle, url: String) -> Result<(), String> {
     window
         .navigate(parsed)
         .map_err(|e| e.to_string())
+}
+
+/// Cheap boot-time reachability check: does a TCP connect to the URL's
+/// host:port succeed within 1.5s? (DNS failure counts as unreachable — the
+/// setup page then loads with the URL prefilled.) HTTP-level health stays
+/// the setup page's own no-cors healthz fetch.
+fn port_open(url: &tauri::Url) -> bool {
+    let Some(port) = url.port_or_known_default() else {
+        return true; // unknown scheme → don't second-guess, load it
+    };
+    let Some(host) = url.host_str() else {
+        return true;
+    };
+    let Ok(addrs) = (host, port).to_socket_addrs() else {
+        return false;
+    };
+    for addr in addrs {
+        if TcpStream::connect_timeout(&addr, Duration::from_millis(1_500)).is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+/// The shell's bundled-page origin (Tauri's `get_app_url` is pub(crate)):
+/// Windows/Android resolve WebviewUrl::App to http://tauri.localhost, other
+/// desktops to tauri://localhost.
+fn app_url(path: &str) -> String {
+    if cfg!(windows) {
+        format!("http://tauri.localhost/{path}")
+    } else {
+        format!("tauri://localhost/{path}")
+    }
+}
+
+/// Reopen the setup page in the main window (app menu / boot fallback).
+/// This never touches config: the page prefills the saved URL itself.
+fn open_firstrun(app: &tauri::AppHandle) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("main window gone")?;
+    let parsed: tauri::Url = app_url("firstrun.html")
+        .parse()
+        .map_err(|e| format!("setup URL: {e}"))?;
+    window.navigate(parsed).map_err(|e| e.to_string())
 }
 
 /// Called by the first-run page after it has verified the URL answers
@@ -163,7 +210,15 @@ fn main() {
                 Some(u) => {
                     let parsed: tauri::Url =
                         u.parse().map_err(|e| format!("invalid stored URL: {e}"))?;
-                    WebviewUrl::External(parsed)
+                    // A down server means the setup screen, not a webview
+                    // error page: the saved URL arrives prefilled and a
+                    // Connect retry re-checks it.
+                    if port_open(&parsed) {
+                        WebviewUrl::External(parsed)
+                    } else {
+                        eprintln!("stored server {u} did not answer at boot — opening setup");
+                        WebviewUrl::App("firstrun.html".into())
+                    }
                 }
                 None => WebviewUrl::App("firstrun.html".into()),
             };
@@ -172,6 +227,12 @@ fn main() {
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(760.0, 500.0)
                 .build()?;
+            // The always-visible path back to setup: one small menu.
+            let accelerator: Option<&str> = if cfg!(windows) { Some("Ctrl+U") } else { None };
+            let change_server =
+                MenuItem::with_id(app.handle(), "reconfigure", "Change server…", true, accelerator)?;
+            let menu = Menu::with_items(app.handle(), &[&change_server])?;
+            app.set_menu(menu)?;
             // Local sandbox (ADR-015): spawn+supervise the runner when creds
             // exist and this is not a --reconfigure run (the user is picking a
             // NEW server; the runner follows after the config saves… on the
@@ -203,12 +264,19 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .and_then(|app| {
-            app.run(|_app, event| {
-                if matches!(
-                    event,
-                    tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
-                ) {
-                    supervisor::shutdown();
+            app.run(|app, event| {
+                match event {
+                    tauri::RunEvent::MenuEvent(menu) => {
+                        if menu.id().as_ref() == "reconfigure" {
+                            if let Err(err) = open_firstrun(app) {
+                                eprintln!("reconfigure failed: {err}");
+                            }
+                        }
+                    }
+                    tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                        supervisor::shutdown();
+                    }
+                    _ => {}
                 }
             });
             Ok(())

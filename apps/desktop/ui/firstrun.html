@@ -80,12 +80,16 @@
     </div>
     <p class="status" id="status"></p>
     <button id="go" type="submit">Connect</button>
+    <p class="hint" id="backWrap" style="display: none; margin-top: -6px">
+      <a href="#" id="back" style="color: var(--fg-dim)">Reopen the saved server without saving changes →</a>
+    </p>
   </form>
   <script>
     const $ = (id) => document.getElementById(id);
     const status = $("status");
     const set = (cls, text) => { status.className = "status " + cls; status.textContent = text; };
     let savedLocal; // get_local_sandbox view when one is configured
+    let backUrl = ""; // saved server URL, for the escape link
 
     $("url").addEventListener("focus", () => {
       if ($("url").value === "") $("url").value = "http://127.0.0.1:8787";
@@ -111,9 +115,31 @@
       }
     }).catch(() => { /* fresh install */ });
 
-    window.__TAURI__.core.invoke("get_server_url").then((v) => {
-      if (typeof v === "string" && v !== "") $("url").value = v;
+    window.__TAURI__.core.invoke("get_server_url").then(async (v) => {
+      if (typeof v === "string" && v !== "") {
+        $("url").value = v;
+        backUrl = v;
+        $("backWrap").style.display = "block";
+        set("", "Saved server: " + v + " — checking …");
+        if (await reachable(v)) {
+          set("ok", "Saved server is reachable — press Connect to continue.");
+        } else {
+          set("err", "Saved server (" + v + ") is not reachable. Start the core, or edit the address and Connect.");
+        }
+      }
     }).catch(() => { /* fresh install */ });
+
+    $("back").addEventListener("click", async (e) => {
+      e.preventDefault();
+      if (backUrl === "") return;
+      set("", "Loading " + backUrl + " …");
+      try {
+        // Re-saving the same URL is a no-op; set_server_url navigates the window.
+        await window.__TAURI__.core.invoke("set_server_url", { url: backUrl });
+      } catch (err) {
+        set("err", String(err));
+      }
+    });
 
     async function reachable(base) {
       // The core sends no CORS headers, so a plain cross-origin GET can't be

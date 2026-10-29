@@ -43,4 +43,11 @@ to match the web app's brand — dark tile, terracotta 4-point star).
 ## Server URL
 
 Stored in `<app-config-dir>\foundry.json` (`%APPDATA%\app.foundry.desktop\foundry.json`
-on Windows). Default prefill is `http://127.0.0.1:8787`.
+on Windows). Default prefill is `http://127.0.0.1:8787`; any reachable core
+origin works — `http://<IP>:8787` on the LAN or a Tailscale hostname (the
+core side must listen on a non-loopback `FOUNDRY_HOST` for that). The setup
+page reopens from the app menu (**Connection → Change server…**, Ctrl+U) and
+automatically when the saved URL doesn't answer at boot (the webview would
+otherwise show a bare connection-error page); `--reconfigure` still works.
+A change of server does not restart the local runner until the next app
+start (same as the original first-run behavior).
