@@ -11,8 +11,10 @@ interface CorePackageInfo {
 }
 
 function readVersion(): string {
+  // One level up from src/ OR dist/ is apps/core/ — its manifest carries the
+  // version ("../../" would resolve to the nonexistent apps/package.json).
   try {
-    const pkgUrl = new URL("../../package.json", import.meta.url);
+    const pkgUrl = new URL("../package.json", import.meta.url);
     const pkg = JSON.parse(readFileSync(pkgUrl, "utf8")) as CorePackageInfo;
     return typeof pkg.version === "string" ? pkg.version : "0.0.0";
   } catch {
