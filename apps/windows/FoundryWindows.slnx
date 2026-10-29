@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/tests/">
+    <Project Path="tests/Foundry.Tests/Foundry.Tests.csproj" />
+  </Folder>
+  <Project Path="Foundry.App/Foundry.App.csproj" />
+  <Project Path="Foundry.Protocol/Foundry.Protocol.csproj" />
+  <Project Path="Foundry.RunnerSup/Foundry.RunnerSup.csproj" />
+  <Project Path="Foundry.Sdk/Foundry.Sdk.csproj" />
+  <Project Path="Foundry.Store/Foundry.Store.csproj" />
+</Solution>
