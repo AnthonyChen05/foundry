@@ -31,36 +31,62 @@ public sealed class AppStore
 {
     private readonly object _lock = new();
     private AppState _app = new();
-    private readonly IFdSocket _socket;
-    private readonly IFdRest _rest;
+    private IFdSocket? _socket;
+    private IFdRest? _rest;
+    private readonly Func<string, IFdSocket> _socketFactory;
+    private readonly Func<string, IFdRest> _restFactory;
     private readonly IPersistedSession _session;
     private readonly Action<UiNotification>? _onNotify;
     public Func<Task>? OnRunWaitingApproval { get; set; } // VM hook (e.g. toast/navigation), fires on UI-safe side
 
     /// <summary>
     /// Transport seams: IFdSocket + IFdRest ship in Foundry.Sdk next to their concrete
-    /// implementations (FoundrySocket raises OnEvent/OnResync/OnStatus on its own reader
-    /// thread; the store mutates under _lock, VMs marshal to the UI thread).
+    /// implementations. The store builds a FRESH socket+rest per ConnectInAsync
+    /// (server switching = new transports; the old socket is closed first) using the
+    /// factories; events raise on the socket's reader thread, mutation stays under _lock,
+    /// VMs marshal to the UI thread.
     /// </summary>
-    public AppStore(IFdSocket socket, IFdRest rest, IPersistedSession session, Action<UiNotification>? onNotify = null)
+    public AppStore(Func<string, IFdSocket> socketFactory, Func<string, IFdRest> restFactory, IPersistedSession session, Action<UiNotification>? onNotify = null)
     {
-        _socket = socket;
-        _rest = rest;
+        _socketFactory = socketFactory;
+        _restFactory = restFactory;
         _session = session;
         _onNotify = onNotify;
-        socket.OnEvent += Intake;
-        socket.OnResync += IntakeResync;
-        socket.OnStatus += IntakeStatus;
     }
+
+    /// <summary>The connected socket (null until ConnectInAsync ran).</summary>
+    public IFdSocket Socket => _socket ?? throw new InvalidOperationException("not connected");
+
+    /// <summary>Internal view of the current transports (null when disconnected).</summary>
+    private IFdSocket Sock => _socket ?? throw new InvalidOperationException("not connected");
+    private IFdRest Rest => _rest ?? throw new InvalidOperationException("not connected");
 
     /// <summary>Raised with the fresh snapshot after every mutation (any thread).</summary>
     public event Action<AppState>? StateChanged;
+
+    /// <summary>TEST SEAM: wire a store built without its own boot to an already-booted socket.</summary>
+    internal void BindForTest(IFdSocket sock)
+    {
+        sock.OnEvent += Intake;
+        sock.OnResync += IntakeResync;
+        sock.OnStatus += IntakeStatus;
+    }
 
     public AppState State { get { lock (_lock) return _app; } }
 
     // ------------------------------------------------------------------
     // boot / login / logout (Android AppStore: 121-234)
     // ------------------------------------------------------------------
+
+    /// <summary>Setup-screen pick: record the server meta (no token) → boot lands on Login
+    /// prefilled. Keeps any existing token/ntfy fields via the session file's rules.</summary>
+    public void ConfigureServer(string serverUrl)
+    {
+        var url = BaseUrlNormalizer.StripTrailingSlash(serverUrl);
+        var keep = State;
+        _session.Save(new PersistedSession(url, "", keep.Username is { Length: > 0 } ? keep.Username : "admin", _session.Read()?.NtfyUrl, _session.Read()?.NtfyTopic));
+        Set(serverUrl: url, phase: "login", conn: ConnStatus.Offline, connError: "");
+    }
 
     /// <summary>Boot: persisted session → connect; none → login screen (prefilled).</summary>
     public async Task BootAsync()
@@ -86,28 +112,43 @@ public sealed class AppStore
         }
     }
 
+    private int _loggingIn;
+
     public async Task LoginAsync(string serverUrlInput, string username, string password)
     {
-        var serverUrl = BaseUrlNormalizer.FromLoginInput(serverUrlInput);
-        Set(conn: ConnStatus.Connecting, connError: "", serverUrl: serverUrl, username: username.Trim());
+        // Re-entrancy guard: a login (or its UI) can be constructed twice during the
+        // boot/connect dance; two concurrent LoginAsyncs = a close+reconnect churn.
+        if (Interlocked.CompareExchange(ref _loggingIn, 1, 0) == 1) return;
         try
         {
-            var login = await _rest.Login(username.Trim(), password).ConfigureAwait(false);
-            // NOTE (fix vs Android): keep persisted ntfy settings across re-logins.
-            var keep = _session.Read();
-            _session.Save(new PersistedSession(serverUrl, login.SessionToken, username.Trim(), keep?.NtfyUrl, keep?.NtfyTopic));
-            await ConnectInAsync(serverUrl, login.SessionToken, username.Trim()).ConfigureAwait(false);
+            var serverUrl = BaseUrlNormalizer.FromLoginInput(serverUrlInput);
+            Set(conn: ConnStatus.Connecting, connError: "", serverUrl: serverUrl, username: username.Trim());
+            // Login is the URL-change path: fresh REST transport for (and owned by) this login.
+            var rest = _restFactory(serverUrl);
+            _rest = rest;
+            try
+            {
+                var login = await rest.Login(username.Trim(), password).ConfigureAwait(false);
+                // NOTE (fix vs Android): keep persisted ntfy settings across re-logins.
+                var keep = _session.Read();
+                _session.Save(new PersistedSession(serverUrl, login.SessionToken, username.Trim(), keep?.NtfyUrl, keep?.NtfyTopic));
+                await ConnectInAsync(serverUrl, login.SessionToken, username.Trim()).ConfigureAwait(false);
+            }
+            catch (FoundryError err)
+            {
+                Set(conn: ConnStatus.Offline, connError: err.Message, phase: "login");
+            }
         }
-        catch (FoundryError err)
+        finally
         {
-            Set(conn: ConnStatus.Offline, connError: err.Message, phase: "login");
+            Interlocked.Exchange(ref _loggingIn, 0);
         }
     }
 
     public async Task LogoutAsync()
     {
         _session.ClearToken();
-        await _socket.CloseAsync().ConfigureAwait(false);
+        await CloseSocketAsync().ConfigureAwait(false);
         var keep = _session.Read();
         ResetState();
         Set(phase: "login", conn: ConnStatus.Offline, connError: "",
@@ -117,12 +158,13 @@ public sealed class AppStore
     public async Task ReconnectAsync()
     {
         var s = State;
-        if (s.ServerUrl.Length == 0 || _socket.Token is not { Length: > 0 }) return;
+        var token = _session.Read()?.Token;
+        if (s.ServerUrl.Length == 0 || token is not { Length: > 0 }) return;
         Set(connError: "");
-        await _socket.CloseAsync().ConfigureAwait(false);
+        await CloseSocketAsync().ConfigureAwait(false);
         try
         {
-            await ConnectInAsync(s.ServerUrl, _socket.Token, s.Username).ConfigureAwait(false);
+            await ConnectInAsync(s.ServerUrl, token, s.Username).ConfigureAwait(false);
         }
         catch (FoundryError err)
         {
@@ -131,25 +173,49 @@ public sealed class AppStore
         }
     }
 
+    /// <summary>Close + drop the current transports (redundant-safe).</summary>
+    private async Task CloseSocketAsync()
+    {
+        if (_socket is { } old)
+        {
+            _socket = null;
+            try { await old.CloseAsync().ConfigureAwait(false); } catch { /* dying anyway */ }
+        }
+    }
+
     private async Task ConnectInAsync(string serverUrl, string token, string username)
     {
-        Set(conn: ConnStatus.Connecting, connError: "", serverUrl: serverUrl, username: username,
-            phase: "login");
-        _rest.Token = token;
-        _socket.SetToken(token);
+        // NOTE: this does NOT set phase — the caller owns it (the boot and interactive
+        // login both sit in "login" already; a connect must not flip a ready phase back
+        // and re-trigger the login screen, which churned LoginPage instances forever).
+        SockLogSink.Line($"store connect-in url={serverUrl}");
+        Set(conn: ConnStatus.Connecting, connError: "", serverUrl: serverUrl, username: username);
+        // Fresh socket per connect; the REST transport: reuse the one the login built for
+        // this server (fresh otherwise — e.g. a boot-time resume).
+        await CloseSocketAsync().ConfigureAwait(false);
+        var socket = _socketFactory(serverUrl);
+        var rest = _rest ?? _restFactory(serverUrl);
+        _rest = rest;
+        _socket = socket;
+        socket.OnEvent += Intake;
+        socket.OnResync += IntakeResync;
+        socket.OnStatus += IntakeStatus;
+        socket.SetToken(token);
+        rest.Token = token;
         try
         {
-            await _socket.ConnectAsync(CancellationToken.None).ConfigureAwait(false);
+            await socket.ConnectAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (FoundryError err) when (err.IsAuthFailure)
         {
-            // Stale/revoked token: forget it, return to the login gate (web store do the same).
+            // Stale/revoked token: forget it, return to the login gate (web store does the same).
             _session.ClearToken();
+            _socket = null;
             Set(conn: ConnStatus.Offline, phase: "login", connError: err.Message);
             return;
         }
         Set(phase: "ready", conn: ConnStatus.Open);
-        _socket.StartReconnectLoop();
+        socket.StartReconnectLoop();
         await RefreshChatsAsync().ConfigureAwait(false);
         await RefreshModelsAsync().ConfigureAwait(false);
         await ProbeExecutorAsync().ConfigureAwait(false);
@@ -163,7 +229,7 @@ public sealed class AppStore
 
     public async Task CreateChatAsync(string? title = null)
     {
-        var chat = await _socket.ChatCreate(title, model: null).ConfigureAwait(false);
+        var chat = await Sock.ChatCreate(title, model: null).ConfigureAwait(false);
         lock (_lock)
         {
             _app = _app with
@@ -195,7 +261,7 @@ public sealed class AppStore
         string sendRunId = "", sendConv = "";
         try
         {
-            (sendRunId, sendConv) = await _socket.ChatSend(chatToUse, content, model, agent, idem).ConfigureAwait(false);
+            (sendRunId, sendConv) = await Sock.ChatSend(chatToUse, content, model, agent, idem).ConfigureAwait(false);
         }
         catch (FoundryError err)
         {
@@ -217,10 +283,10 @@ public sealed class AppStore
             _app = _app with { SelectedRunId = runId };
         }
         NotifyChanged();
-        return runId.Length == 0 ? null : await _socket.RunGet(runId).ConfigureAwait(false);
+        return runId.Length == 0 ? null : await Sock.RunGet(runId).ConfigureAwait(false);
     }
 
-    public Task CancelRunAsync(string runId) => _socket.RunCancel(runId, Idem("cancel"));
+    public Task CancelRunAsync(string runId) => Sock.RunCancel(runId, Idem("cancel"));
 
     /// <summary>Approve/deny. Scope: null on deny AND on approve-once; session/when approving
     /// otherwise (both reference clients do this — deny carries no scope at all).</summary>
@@ -229,7 +295,7 @@ public sealed class AppStore
         var effective = approve ? scope : null;
         if (approve && effective == GateScopes.Once) effective = null;
         var idem = Idem("gate");
-        return _socket.RunApprove(new RunApproveParams(runId, gateId, approve, effective), idem);
+        return Sock.RunApprove(new RunApproveParams(runId, gateId, approve, effective), idem);
     }
 
     public async Task FocusRunAsync(string runId)
@@ -243,7 +309,7 @@ public sealed class AppStore
         catch (FoundryError) { /* run may be unknown to this token — ignore */ }
     }
 
-    public Task PushChatToCloudAsync(string chatId) => _rest.PushChat(chatId);
+    public Task PushChatToCloudAsync(string chatId) => Rest.PushChat(chatId);
 
     // term/files passthroughs live in the screen VMs (they need env binding from the ACTIVE chat)
     public string? EnvIdFor(string chatId)
@@ -251,29 +317,29 @@ public sealed class AppStore
         return State.Chats.TryGetValue(chatId, out var chat) ? chat.EnvId : null;
     }
 
-    public Task<List<FileEntry>> FilesListAsync(string path, string? envId) => _socket.FilesList(path, envId);
-    public Task<FilesReadResult> FilesReadAsync(string path, string? envId) => _socket.FilesRead(path, envId);
-    public Task FilesWriteAsync(string path, string content, string? envId) => _socket.FilesWrite(path, content, null, envId, Idem("files"));
-    public Task FilesMkdirAsync(string path, bool recursive, string? envId) => _socket.FilesMkdir(path, recursive, envId, Idem("files"));
-    public Task FilesRmAsync(string path, bool recursive, string? envId) => _socket.FilesRm(path, recursive, envId, Idem("files"));
-    public Task<TermOpenResult> TermOpenAsync(string? envId) => _socket.TermOpen(envId, Idem("term"));
-    public Task TermInputAsync(string termId, string data) => _socket.TermInput(termId, data, null, Idem("term-in"));
+    public Task<List<FileEntry>> FilesListAsync(string path, string? envId) => Sock.FilesList(path, envId);
+    public Task<FilesReadResult> FilesReadAsync(string path, string? envId) => Sock.FilesRead(path, envId);
+    public Task FilesWriteAsync(string path, string content, string? envId) => Sock.FilesWrite(path, content, null, envId, Idem("files"));
+    public Task FilesMkdirAsync(string path, bool recursive, string? envId) => Sock.FilesMkdir(path, recursive, envId, Idem("files"));
+    public Task FilesRmAsync(string path, bool recursive, string? envId) => Sock.FilesRm(path, recursive, envId, Idem("files"));
+    public Task<TermOpenResult> TermOpenAsync(string? envId) => Sock.TermOpen(envId, Idem("term"));
+    public Task TermInputAsync(string termId, string data) => Sock.TermInput(termId, data, null, Idem("term-in"));
     public Task TermInputAsync64(string termId, byte[] bytes) =>
-        _socket.TermInput(termId, Convert.ToBase64String(bytes), b64: true, Idem("term-in"));
-    public Task TermResizeAsync(string termId, int cols, int rows) => _socket.TermResize(termId, cols, rows, Idem("term"));
-    public Task TermCloseAsync(string termId) => _socket.TermClose(termId, Idem("term"));
+        Sock.TermInput(termId, Convert.ToBase64String(bytes), b64: true, Idem("term-in"));
+    public Task TermResizeAsync(string termId, int cols, int rows) => Sock.TermResize(termId, cols, rows, Idem("term"));
+    public Task TermCloseAsync(string termId) => Sock.TermClose(termId, Idem("term"));
 
-    public Task<List<FoundryRest.ProviderRow>> ListProvidersAsync() => _rest.ListProviders();
-    public Task ChangePasswordAsync(string currentPassword, string newPassword) => _rest.ChangePassword(currentPassword, newPassword);
+    public Task<List<FoundryRest.ProviderRow>> ListProvidersAsync() => Rest.ListProviders();
+    public Task ChangePasswordAsync(string currentPassword, string newPassword) => Rest.ChangePassword(currentPassword, newPassword);
 
     public async Task<string?> UpsertProviderAsync(string? id, string kind, string baseUrl, string? apiKey, IReadOnlyList<string>? models)
     {
-        var (upsertedId, _, _, _) = await _rest.UpsertProvider(id, kind, baseUrl, apiKey, models).ConfigureAwait(false);
+        var (upsertedId, _, _, _) = await Rest.UpsertProvider(id, kind, baseUrl, apiKey, models).ConfigureAwait(false);
         await RefreshModelsAsync().ConfigureAwait(false);
         return upsertedId;
     }
 
-    public Task DeleteProviderAsync(string id) => _rest.DeleteProvider(id);
+    public Task DeleteProviderAsync(string id) => Rest.DeleteProvider(id);
 
     // ------------------------------------------------------------------
     // event intake (Android AppStore.handleEvent 247-401, exact semantics)
@@ -497,7 +563,7 @@ public sealed class AppStore
         Set(conn: status);
         switch (status)
         {
-            case ConnStatus.Closed when _socket.AuthFailed:
+            case ConnStatus.Closed when Sock.AuthFailed:
                 _session.ClearToken();
                 ResetState();
                 Set(phase: "login", conn: ConnStatus.Offline, connError: "session expired — sign in again");
@@ -537,7 +603,7 @@ public sealed class AppStore
     {
         try
         {
-            var chats = await _socket.ChatList().ConfigureAwait(false);
+            var chats = await Sock.ChatList().ConfigureAwait(false);
             lock (_lock)
             {
                 var chatsDict = new Dictionary<string, ChatSummary>();
@@ -567,7 +633,7 @@ public sealed class AppStore
     {
         try
         {
-            var models = await _socket.Models().ConfigureAwait(false);
+            var models = await Sock.Models().ConfigureAwait(false);
             lock (_lock)
             {
                 _app = _app with { Models = models };
@@ -582,7 +648,7 @@ public sealed class AppStore
         ExecutorInfo info;
         try
         {
-            info = await _socket.ExecStatus().ConfigureAwait(false);
+            info = await Sock.ExecStatus().ConfigureAwait(false);
         }
         catch (FoundryError)
         {
@@ -597,7 +663,7 @@ public sealed class AppStore
 
     public async Task RefreshMessagesAsync(string chatId)
     {
-        var messages = await _socket.ChatHistory(chatId).ConfigureAwait(false);
+        var messages = await Sock.ChatHistory(chatId).ConfigureAwait(false);
         lock (_lock)
         {
             var messagesDict = Shallow(_app.Messages);
@@ -609,7 +675,7 @@ public sealed class AppStore
 
     private async Task RefreshRunAsync(string runId)
     {
-        var run = await _socket.RunGet(runId).ConfigureAwait(false);
+        var run = await Sock.RunGet(runId).ConfigureAwait(false);
         lock (_lock)
         {
             var runs = Shallow(_app.Runs);
@@ -638,7 +704,7 @@ public sealed class AppStore
     {
         try
         {
-            var items = await _socket.RunEvents(runId).ConfigureAwait(false);
+            var items = await Sock.RunEvents(runId).ConfigureAwait(false);
             lock (_lock)
             {
                 var events = Shallow(_app.Events);
@@ -732,18 +798,9 @@ public sealed class AppStore
         string? activeChatId = null,
         string? selectedRunId = null)
     {
-        bool activeChanged = false, selectedChanged = false, serverChanged = false, userChanged = false,
-             phaseChanged = false, connChanged = false, errChanged = false, selChanged = false;
         lock (_lock)
         {
             var app = _app;
-            phaseChanged = phase is not null && app.Phase != phase;
-            connChanged = conn is not null && app.Conn != conn;
-            errChanged = connError is not null && app.ConnError != connError;
-            serverChanged = serverUrl is not null && app.ServerUrl != serverUrl;
-            userChanged = username is not null && app.Username != username;
-            activeChanged = activeChatId is not null && app.ActiveChatId != activeChatId;
-            selChanged = selectedRunId is not null && app.SelectedRunId != selectedRunId;
             _app = app with
             {
                 Phase = phase ?? app.Phase,
@@ -755,10 +812,7 @@ public sealed class AppStore
                 SelectedRunId = selectedRunId ?? app.SelectedRunId,
             };
         }
-        if (phaseChanged || connChanged || errChanged || serverChanged || userChanged || activeChanged || selChanged)
-        {
-            NotifyChanged();
-        }
+        NotifyChanged();
     }
 
     private void ResetState()

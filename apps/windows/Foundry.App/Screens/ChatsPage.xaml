@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="Foundry_App.Screens.ChatsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Background="Transparent">
+
+    <!-- Two-pane (list | detail) chat surface. Collections are INCREMENTAL (the VM diffs;
+         the ListView virtualizes and KeepLastItemInView follows the stream) — no wholesale
+         rebuilds, no manual layout calls from event handlers. -->
+    <Page.Resources>
+        <screen:LineSelector
+            x:Key="LineSelector"
+            xmlns:screen="using:Foundry_App.Screens"
+            UserTemplate="{StaticResource UserBubble}"
+            AssistantTemplate="{StaticResource AssistantBubble}"
+            ToolTemplate="{StaticResource ToolRow}"
+            ToolMetaTemplate="{StaticResource ToolMetaRow}"
+            LiveTemplate="{StaticResource LiveDraft}"
+            HintTemplate="{StaticResource HintRow}" />
+
+        <DataTemplate x:Key="UserBubble">
+            <Border MaxWidth="640" HorizontalAlignment="Right" Padding="14,9" CornerRadius="14,14,4,14"
+                    Background="#D97757">
+                <TextBlock Text="{Binding Text}" TextWrapping="Wrap" Foreground="White" />
+            </Border>
+        </DataTemplate>
+        <DataTemplate x:Key="AssistantBubble">
+            <Border MaxWidth="640" HorizontalAlignment="Left" Padding="14,9" CornerRadius="14,14,14,4"
+                    Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                <TextBlock Text="{Binding Text}" TextWrapping="Wrap" />
+            </Border>
+        </DataTemplate>
+        <DataTemplate x:Key="ToolRow">
+            <TextBlock MaxWidth="640" HorizontalAlignment="Left" FontFamily="Consolas" FontSize="11"
+                       Text="{Binding Text}" TextWrapping="Wrap"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        </DataTemplate>
+        <DataTemplate x:Key="ToolMetaRow">
+            <TextBlock FontFamily="Consolas" FontSize="12" HorizontalAlignment="Left" Text="{Binding Text}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        </DataTemplate>
+        <DataTemplate x:Key="LiveDraft">
+            <Border MaxWidth="640" HorizontalAlignment="Left" Padding="14,9" CornerRadius="14,14,14,4"
+                    Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                <TextBlock Text="{Binding Text}" TextWrapping="Wrap"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </Border>
+        </DataTemplate>
+        <DataTemplate x:Key="HintRow">
+            <TextBlock HorizontalAlignment="Center" Text="{Binding Text}" Margin="0,40,0,0"
+                       Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="300" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- list pane -->
+        <Grid Grid.Column="0" Margin="8,0,4,8" RowSpacing="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Button Content="New chat" Click="OnNewChat" HorizontalAlignment="Stretch" />
+            <ListView x:Name="ChatList" Grid.Row="1" SelectionMode="Single" SelectionChanged="OnChatSelected"
+                      ItemsSource="{x:Bind Vm.ChatRows}"
+                      SelectedIndex="{x:Bind Vm.SelectedChatIndex, Mode=TwoWay}">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Padding="8,6" RowSpacing="2">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <Border Grid.Column="1" VerticalAlignment="Top" Padding="6,1" CornerRadius="9"
+                                    Visibility="{Binding ShowLocation}">
+                                <TextBlock Text="{Binding Location}" FontSize="11" />
+                            </Border>
+                            <TextBlock Grid.Row="1" Text="{Binding Meta}" FontSize="12"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Grid>
+
+        <!-- detail pane -->
+        <Grid Grid.Column="1" Margin="8,0,8,8" RowSpacing="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <ListView x:Name="LinesList" ItemsSource="{x:Bind Vm.Lines}" SelectionMode="None"
+                      ItemTemplateSelector="{StaticResource LineSelector}">
+                <ListView.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <!-- chat auto-follow: the LAST line stays in view as rows append -->
+                        <ItemsStackPanel ItemsUpdatingScrollMode="KeepLastItemInView" />
+                    </ItemsPanelTemplate>
+                </ListView.ItemsPanel>
+            </ListView>
+
+            <!-- composer -->
+            <Grid Grid.Row="1" ColumnSpacing="8" Margin="8,0,8,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <ScrollViewer VerticalScrollMode="Auto" VerticalScrollBarVisibility="Auto" MaxHeight="120">
+                    <TextBox
+                        x:Name="Composer"
+                        AcceptsReturn="True"
+                        TextWrapping="Wrap"
+                        PlaceholderText="Message (Enter to send, Shift+Enter for a newline)"
+                        KeyDown="OnComposerKey" />
+                </ScrollViewer>
+                <Button Grid.Column="1" x:Name="SendBtn" Content="Send" Click="OnSend" VerticalAlignment="Bottom"
+                        Style="{StaticResource AccentButtonStyle}" IsEnabled="{x:Bind Vm.SendEnabled, Mode=OneWay}" />
+            </Grid>
+            <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10" Margin="8,6,8,0">
+                <ComboBox x:Name="ModelBox" MinWidth="240" ItemsSource="{x:Bind Vm.Models}" SelectionChanged="OnModelChanged" />
+                <ToggleSwitch x:Name="AgentSwitch" OnContent="agent" OffContent="plain" Toggled="OnAgentToggled" />
+                <TextBlock x:Name="ComposerHint" VerticalAlignment="Center" FontSize="12" Text="{x:Bind Vm.Hint, Mode=OneWay}"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Page>

@@ -1,17 +1,16 @@
 using Microsoft.UI.Xaml;
 
-// To learn more about WinUI, the WinUI project structure,
-// and more about our project templates, see: http://aka.ms/winui-project-info.
-
 namespace Foundry_App;
 
 /// <summary>
-/// The application window. This hosts a Frame that displays pages. Add your
-/// UI and logic to MainPage.xaml / MainPage.xaml.cs instead of here so you
-/// can use Page features such as navigation events and the Loaded lifecycle.
+/// The application window: title bar + a root frame whose content the Router swaps per
+/// store phase (Setup → Login → MainShell).
 /// </summary>
 public sealed partial class MainWindow : Window
 {
+    /// <summary>The root frame the Router navigates (public: Router is out-of-class).</summary>
+    public Microsoft.UI.Xaml.Controls.Frame Root { get; private set; } = null!;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -21,7 +20,8 @@ public sealed partial class MainWindow : Window
 
         AppWindow.SetIcon("Assets/AppIcon.ico");
 
-        // Navigate the root frame to the main page on startup.
-        RootFrame.Navigate(typeof(MainPage));
+        Title = "Foundry";
+        Root = RootFrame;
+        // The Router navigates Root on the first store state after boot.
     }
 }

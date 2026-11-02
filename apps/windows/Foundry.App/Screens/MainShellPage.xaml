@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="Foundry_App.Screens.MainShellPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Background="Transparent">
+
+    <!-- Main shell: NavigationView across chat / terminal / files / settings with the
+         live connection indicator in the header. Terminal + Files land in M4; Settings
+         fills in M5 (the items are present from v2 so the shell is stable). -->
+    <NavigationView
+        x:Name="Nav"
+        IsBackButtonVisible="Collapsed"
+        PaneDisplayMode="LeftCompact"
+        OpenPaneLength="200"
+        SelectionChanged="OnNavChanged"
+        IsPaneToggleButtonVisible="False">
+        <!-- Icons: unpackaged apps without a PRI can't resolve string SymbolIcons — the
+             items are text-only for now; FontIcon glyphs (explicit "Segoe Fluent Icons"
+             family) get added after the PRI story is settled. -->
+        <NavigationView.MenuItems>
+            <NavigationViewItem Content="Chats" Tag="chats" />
+            <NavigationViewItem Content="Terminal" Tag="term" />
+            <NavigationViewItem Content="Files" Tag="files" />
+            <NavigationViewItem Content="Settings" Tag="settings" />
+        </NavigationView.MenuItems>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Grid ColumnSpacing="10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="HeaderTitle" Text="Chats" FontWeight="SemiBold" FontSize="18" Margin="8,4,0,0" />
+                <TextBlock x:Name="ConnDot" Grid.Column="1" Text="○ offline" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Margin="0,8,8,0" FontFamily="Consolas" />
+            </Grid>
+            <Frame x:Name="ContentFrame" Grid.Row="1" />
+        </Grid>
+    </NavigationView>
+</Page>

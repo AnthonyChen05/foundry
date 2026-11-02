@@ -15,6 +15,7 @@ public class SocketSpec
         _ = hub.AcceptAsync(); // arm the listener; the pump runs detached
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await sock.ConnectAsync(cts.Token); // throws (incl. any timeout) → test fails loudly
+        if (autoReconnect) sock.StartReconnectLoop(); // the store does this post-connect
         return sock;
     }
 

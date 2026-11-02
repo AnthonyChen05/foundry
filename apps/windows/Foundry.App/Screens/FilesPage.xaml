@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="Foundry_App.Screens.FilesPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Background="Transparent">
+    <!-- M4: real files browser. -->
+    <Grid Padding="24">
+        <TextBlock Text="Files — lands in M4 (list/read/mkdir/rm/write)." Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+    </Grid>
+</Page>

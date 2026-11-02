@@ -7,9 +7,16 @@ namespace Foundry.RunnerSup;
 /// Tauri shell: config JSON + runner.log next to it.</summary>
 public static class AppDirs
 {
-    /// <summary>%LOCALAPPDATA%\Foundry (creation is the caller's job when writing).</summary>
-    public static string DataDir() =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Foundry");
+    /// <summary>%LOCALAPPDATA%\Foundry (creation is the caller's job when writing).
+    /// FOUNDRY_APP_DATA_DIR overrides — used by the UI-test battery to run against a
+    /// scratch config.</summary>
+    public static string DataDir()
+    {
+        var overrideDir = Environment.GetEnvironmentVariable("FOUNDRY_APP_DATA_DIR");
+        return overrideDir is { Length: > 0 }
+            ? overrideDir
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Foundry");
+    }
 
     public static string ConfigPath() => Path.Combine(DataDir(), "foundry.json");
     public static string RunnerLogPath() => Path.Combine(DataDir(), "runner.log");

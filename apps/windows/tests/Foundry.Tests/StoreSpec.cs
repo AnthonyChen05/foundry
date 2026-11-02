@@ -8,7 +8,9 @@ namespace Foundry.Tests;
 
 /// <summary>
 /// Store behavior with a scripted transport (the Android AppStore semantics, quirks FIXED
-/// where the porting plan says to). These are pure-unit: no sockets, no files on disk.
+/// where the porting plan says to). Pure-unit: no sockets, no files. Intake tests boot a
+/// connected store first — events only flow through the connected socket (factory = new
+/// transports per ConnectInAsync).
 /// </summary>
 public class StoreSpec
 {
@@ -34,11 +36,14 @@ public class StoreSpec
         public event Action<string>? OnResync;
         public event Action<string>? OnStatus;
 
-        public readonly Queue<Task<JsonElement>> ScriptedModels = [];
         public readonly Queue<Task<JsonElement>> ScriptedChats = [];
+        public readonly Queue<Task<JsonElement>> ScriptedModels = [];
         public readonly Queue<Task<JsonElement>> ScriptedRunGets = [];
         public readonly Queue<Task<JsonElement>> ScriptedRunEvents = [];
         public readonly Queue<Task<JsonElement>> ScriptedExecStatus = [];
+
+        public RunApproveParams? LastApprove;
+        public bool Online;
 
         public void SetToken(string? token) => Token = token;
         public Task<ConnectResult> ConnectAsync(CancellationToken ct) => Task.FromResult(new ConnectResult(
@@ -46,25 +51,26 @@ public class StoreSpec
         public void StartReconnectLoop() { }
         public Task CloseAsync() => Task.CompletedTask;
 
-        public Task<List<Model>> Models() => ScriptedModels.Dequeue().ContinueWith(t => ParseList<Model>(t.Result, WireJsonContext.Default.ListModel));
-        public Task<List<ChatSummary>> ChatList() => ScriptedChats.Dequeue().ContinueWith(t => ParseList<ChatSummary>(t.Result, WireJsonContext.Default.ListChatSummary));
+        public Task<List<Model>> Models() => ScriptedModels.Dequeue().DeserializeList(WireJsonContext.Default.ListModel);
+        public Task<List<ChatSummary>> ChatList() => ScriptedChats.Dequeue().DeserializeList(WireJsonContext.Default.ListChatSummary);
         public async Task<ChatSummary> ChatCreate(string? title, string? model) => new("ch_new", title ?? "New chat", model, Iso(), Iso());
         public Task<List<Message>> ChatHistory(string chatId) => Task.FromResult(new List<Message>());
         public async Task<(string RunId, string ConversationId)> ChatSend(string chatId, string content, string? model, AgentParams? agent, string idem)
         {
-            if (agent is { Enabled: true, Location: "local" } && ThrowLocalOffline) throw new FoundryError(ErrorCodes.BadRequest, "local execution requested but no local executor is connected — start the desktop app");
+            if (agent is { Enabled: true, Location: "local" } && !Online)
+                throw new FoundryError(ErrorCodes.BadRequest, "local execution requested but no local executor is connected — start the desktop app");
             return ("run_1", chatId);
         }
-        public bool ThrowLocalOffline { get; set; }
-
-        public async Task<Run> RunGet(string runId) => (await ScriptedRunGets.Dequeue().ConfigureAwait(false)).ReadWire(WireJsonContext.Default.Run)!;
-        public Task<List<RunEventItem>> RunEvents(string runId) => ScriptedRunEvents.Dequeue().ContinueWith(t => ParseList<RunEventItem>(t.Result, WireJsonContext.Default.ListRunEventItem));
+        public async Task<Run> RunGet(string runId) => (await ScriptedRunGets.Dequeue()).ReadWire(WireJsonContext.Default.Run)!;
+        public Task<List<RunEventItem>> RunEvents(string runId) => ScriptedRunEvents.Dequeue().DeserializeList(WireJsonContext.Default.ListRunEventItem);
         public Task<JsonElement> RunCancel(string runId, string idem) => Task.FromResult(JsonSer(new { }));
-        public RunApproveParams? LastApprove;
-        public Task<Gate> RunApprove(RunApproveParams p, string idem) { LastApprove = p; return Task.FromResult(new Gate(
-            p.GateId, p.RunId, "shell", null, GatePolicies.Ask,
-            p.Approve ? GateStates.Approved : GateStates.Denied,
-            p.Scope, "s_fake", Iso(), Iso()));
+        public Task<Gate> RunApprove(RunApproveParams p, string idem)
+        {
+            LastApprove = p;
+            return Task.FromResult(new Gate(
+                p.GateId, p.RunId, "shell", null, GatePolicies.Ask,
+                p.Approve ? GateStates.Approved : GateStates.Denied,
+                p.Scope, "s_fake", Iso(), Iso()));
         }
         public Task<TermOpenResult> TermOpen(string? envId, string idem) => Task.FromResult(new TermOpenResult("term_1", envId ?? "env_default", "old line\n"));
         public Task<JsonElement> TermInput(string termId, string data, bool? b64, string idem) => Task.FromResult(JsonSer(new { }));
@@ -76,11 +82,8 @@ public class StoreSpec
         public Task<JsonElement> FilesMkdir(string path, bool? recursive, string? envId, string idem) => Task.FromResult(JsonSer(new { }));
         public Task<JsonElement> FilesRm(string path, bool? recursive, string? envId, string idem) => Task.FromResult(JsonSer(new { }));
         public Task<FileEntry> FilesStat(string path, string? envId) => Task.FromResult(new FileEntry(path, 3, Iso(), false));
-        public async Task<ExecutorInfo> ExecStatus() => (await ScriptedExecStatus.Dequeue().ConfigureAwait(false)).ReadWire(WireJsonContext.Default.ExecutorInfo)!;
+        public async Task<ExecutorInfo> ExecStatus() => (await ScriptedExecStatus.Dequeue()).ReadWire(WireJsonContext.Default.ExecutorInfo)!;
         public Task<AuthLoginResult> AuthLogin(string username, string password) => throw new InvalidOperationException("unit store tests use REST login");
-
-        private static List<T> ParseList<T>(JsonElement payload, System.Text.Json.Serialization.Metadata.JsonTypeInfo<List<T>> typeInfo) =>
-            payload.ValueKind == JsonValueKind.Array ? (List<T>?)payload.Deserialize(typeInfo) ?? [] : [];
 
         internal void Emit(string e, string channel, long seq, object? payload) => OnEvent?.Invoke(e, channel, seq, payload is null ? null : JsonSer(payload));
         internal void EmitResync(string channel) => OnResync?.Invoke(channel);
@@ -112,20 +115,29 @@ public class StoreSpec
         public Task DeleteProvider(string id) => Task.CompletedTask;
     }
 
-    private static (AppStore store, FakeSocket sock, FakeRest rest, FakeSession session) MakeStore()
+    private static async Task<(AppStore store, FakeSocket sock, FakeRest rest, FakeSession session)> Boot(
+        bool executorOnline = false)
     {
         var sock = new FakeSocket();
-        var rest = new FakeRest();
+        var rest = new FakeRest { LoginImpl = () => new AuthLoginResult("fnds_t", "2030-01-01T00:00:00Z") };
         var session = new FakeSession();
-        var store = new AppStore(sock, rest, session);
+        var store = new AppStore(_ => sock, _ => rest, session);
+        sock.ScriptedChats.Enqueue(Task.FromResult(FakeSocket.JsonSer(Array.Empty<object>())));
+        sock.ScriptedModels.Enqueue(Task.FromResult(FakeSocket.JsonSer(Array.Empty<object>())));
+        sock.ScriptedExecStatus.Enqueue(Task.FromResult(FakeSocket.JsonSer(executorOnline
+            ? new { online = true, name = "desktop", version = "0.1.0", dockerAvailable = true }
+            : new { online = false })));
+        await store.LoginAsync("http://127.0.0.1:8787", "admin", "pw");
+        sock.Online = executorOnline;
+        Assert.Equal("ready", store.State.Phase);
         return (store, sock, rest, session);
     }
 
     [Fact]
     public async Task BootWithoutSession_GoesToLoginPrefilled()
     {
-        var (store, _, _, session) = MakeStore();
-        session.Saved = null;
+        var session = new FakeSession { Saved = null };
+        var store = new AppStore(_ => throw new InvalidOperationException(), _ => throw new InvalidOperationException(), session);
         await store.BootAsync();
         var s = store.State;
         Assert.Equal("login", s.Phase);
@@ -136,23 +148,19 @@ public class StoreSpec
     [Fact]
     public async Task LoginEstablishesReadyAndProbesExecutor()
     {
-        var (store, sock, rest, session) = MakeStore();
-        rest.LoginImpl = () => new AuthLoginResult("fnds_t", "2030-01-01T00:00:00Z");
-        sock.ScriptedChats.Enqueue(Task.FromResult(EmptyJsonArray()));
-        sock.ScriptedModels.Enqueue(Task.FromResult(EmptyJsonArray()));
-        sock.ScriptedExecStatus.Enqueue(Task.FromResult(FakeSocket.JsonSer(new { online = true, name = "desktop", version = "0.1.0", dockerAvailable = true })));
-        await store.LoginAsync("http://127.0.0.1:8787/", "admin", "pw");
+        var (store, sock, _, session) = await Boot(executorOnline: true);
         var s = store.State;
         Assert.Equal("ready", s.Phase);
         Assert.Equal("http://127.0.0.1:8787", s.ServerUrl); // trailing slash stripped
         Assert.Equal("fnds_t", session.Saved!.Token);
         Assert.True(s.Executor!.Online);
+        Assert.Equal("desktop", s.Executor!.Name);
     }
 
     [Fact]
     public async Task ChatDeltaAccumulatesAndFinalClosesDraft()
     {
-        var (store, sock, _, _) = MakeStore();
+        var (store, sock, _, _) = await Boot();
         await store.SelectChatAsync("ch_1");
         sock.Emit("chat.delta", "chat:ch_1", 1, new { runId = "run_1", delta = "Hel" });
         sock.Emit("chat.delta", "chat:ch_1", 2, new { runId = "run_1", delta = "lo" });
@@ -170,7 +178,7 @@ public class StoreSpec
     [Fact]
     public async Task RunStatusTerminalStateTriggersReplayRefetch()
     {
-        var (store, sock, _, _) = MakeStore();
+        var (store, sock, _, _) = await Boot();
         await store.SelectChatAsync("ch_1");
         sock.Emit("run.status", "run:r1", 1, new { runId = "r1", status = "running" });
 
@@ -179,7 +187,7 @@ public class StoreSpec
         sock.ScriptedRunEvents.Enqueue(Task.FromResult(FakeSocket.JsonSer(new[]
         {
             new { seq = 1, type = "tool_call", payload = new { call = new { id = "c1", name = "shell", args = "{}" } }, createdAt = FakeSessionIso() },
-        }.AsEnumerable())));
+        })));
         sock.Emit("run.status", "run:r1", 2, new { runId = "r1", status = "done" });
         await Task.WhenAny(replayWait.Task, Task.Delay(10_000));
         Assert.True(replayWait.Task.IsCompleted, "replay refetch did not land");
@@ -191,9 +199,9 @@ public class StoreSpec
     [Fact]
     public async Task GateRequestsAndResolutionBehave()
     {
-        var (store, sock, _, _) = MakeStore();
+        var (store, sock, _, _) = await Boot();
         await store.SelectChatAsync("ch_1");
-        // gate_request payload: Gate minus state → injected open + run.get is NOT required here.
+        // gate_request payload: Gate minus state → injected open (Android/store parity).
         sock.Emit("run.gate_request", "run:r1", 1, new
         {
             gateId = "g1",
@@ -205,44 +213,44 @@ public class StoreSpec
         });
         var s = store.State;
         Assert.Equal("open", s.Gates["r1"][0].State); // state injected
-        Assert.Equal("r1", s.SelectedRunId.Length > 0 ? "r1" : s.SelectedRunId);
 
-        // Deny: NO scope on the wire (references' parity rule).
-        sock.LastApprove = null;
+        // Deny: NO scope on the wire (both reference clients' parity rule).
         await store.ResolveGateAsync("r1", "g1", approve: false, scope: "once");
-        Assert.Null(sock.LastApprove!.Scope);
         Assert.False(sock.LastApprove!.Approve);
-        // Approve once: scope stripped (server infers once).
-        sock.LastApprove = null;
+        Assert.Null(sock.LastApprove!.Scope);
+        sock.Emit("run.gate_resolved", "run:r1", 2, new { gateId = "g1", approved = false, state = "denied" }); // note: NO scope (timeout auto-deny shape)
+        Assert.False(store.State.Gates.ContainsKey("r1")); // gate list cleared
+
+        // Approve once: scope stripped; session: scope rides.
         await store.ResolveGateAsync("r1", "g1", approve: true, scope: "once");
         Assert.True(sock.LastApprove!.Approve);
         Assert.Null(sock.LastApprove!.Scope);
-        // Approve session: scope rides.
-        sock.LastApprove = null;
         await store.ResolveGateAsync("r1", "g1", approve: true, scope: "session");
-        Assert.Equal("session", sock.LastApprove!.Scope);
+        Assert.Equal(GateScopes.Session, sock.LastApprove!.Scope);
     }
 
     [Fact]
     public async Task NotifyPushIsCappedTwentyAndInvokesHook()
     {
-        var (store, sock, _, _) = MakeStore();
+        var (store, sock, _, _) = await Boot();
         var toastCount = 0;
-        var store2 = new AppStore(sock, new FakeRest(), new FakeSession(), note => Interlocked.Increment(ref toastCount));
+        var hooked = new AppStore(_ => sock, _ => new FakeRest(), new FakeSession(), note => Interlocked.Increment(ref toastCount));
+        hooked.BindForTest(sock); // test seam: intake on an already-booted socket
         for (var i = 1; i <= 25; i++)
         {
             sock.Emit("notify.push", "notify", i, new { title = $"t{i}", body = "b" });
         }
-        var s = store2.State;
+        var s = hooked.State;
         Assert.Equal(20, s.Notifications.Count); // cap
         Assert.Equal("t25", s.Notifications.Last().Title); // drop-oldest
         Assert.Equal(25, toastCount);
+        _ = store;
     }
 
     [Fact]
     public async Task ResyncOnRunChannelRefetchesRunAndEvents()
     {
-        var (store, sock, _, _) = MakeStore();
+        var (store, sock, _, _) = await Boot();
         await store.SelectChatAsync("ch_1");
         var waitRun = new TaskCompletionSource();
         store.StateChanged += _ => { if (store.State.Runs.ContainsKey("rX") && store.State.Events.ContainsKey("rX")) waitRun.TrySetResult(); };
@@ -265,14 +273,31 @@ public class StoreSpec
     [Fact]
     public async Task ExecutorStatusEventUpdatesState()
     {
-        var (store, sock, _, _) = MakeStore();
-        await store.SelectChatAsync("ch_1");
+        var (store, sock, _, _) = await Boot();
         sock.Emit("executor.status", "sys", 7, new { online = false, reason = "dropped" });
         var s = store.State;
         Assert.False(s.Executor!.Online);
         Assert.Equal("dropped", s.Executor!.Reason);
     }
 
-    private static System.Text.Json.JsonElement EmptyJsonArray() => JsonSerializer.SerializeToElement(Array.Empty<object>());
+    [Fact]
+    public async Task ExecutorStatusProbeParsesOnline()
+    {
+        var (store, _, _, _) = await Boot(executorOnline: true);
+        Assert.True(store.State.Executor!.Online);
+        Assert.True(store.State.Executor!.DockerAvailable);
+    }
+
+    [Fact]
+    public async Task LocalSendWithoutExecutorFailsFastAndSurfaces()
+    {
+        var (store, _, _, _) = await Boot(executorOnline: false);
+        await store.SelectChatAsync("ch_1");
+        var run = await store.SendMessageAsync("ch_1", "hello", "m/x", new AgentParams(true, null, "local"));
+        Assert.Null(run); // failed before persistence (the fake throws bad_request)
+        Assert.Contains("no local executor", store.State.ConnError, StringComparison.Ordinal);
+    }
+
+    private static JsonElement EmptyJsonArray() => JsonSerializer.SerializeToElement(Array.Empty<object>());
     private static string FakeSessionIso() => "2026-01-01T00:00:00.000Z";
 }

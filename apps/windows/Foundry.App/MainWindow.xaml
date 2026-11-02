@@ -28,7 +28,9 @@
             The Frame hosts pages for your application content. Add your UI to
             MainPage.xaml rather than here so you can use Page features such as
             navigation events and the Loaded lifecycle.
+            DARK THEME: the app follows the web client's dark-first design; every
+            page renders inside this frame, so the theme set here wins everywhere.
         -->
-        <Frame x:Name="RootFrame" Grid.Row="1" />
+        <Frame x:Name="RootFrame" Grid.Row="1" RequestedTheme="Dark" />
     </Grid>
 </Window>

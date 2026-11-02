@@ -71,6 +71,7 @@ public sealed class FoundrySocket : IFdSocket, IAsyncDisposable
     private void RaiseStatus(string status)
     {
         LastStatus = status;
+        SockLogSink.Line($"status={status} authFailed={_authFailed} ws={"null"}");
         OnStatus?.Invoke(status);
     }
 
@@ -136,26 +137,51 @@ public sealed class FoundrySocket : IFdSocket, IAsyncDisposable
               ?? throw new FoundryError(ErrorCodes.Internal, "bad connect payload")
             : throw new FoundryError(ErrorCodes.Internal, "bad connect payload");
         _ws = ws;
+        SockLogSink.Line($"connect ok (sessionId={result.SessionId})");
         StartReceiveLoop(ws);
         return result;
     }
 
-    /// <summary>Background reconnect loop (start after the first successful ConnectAsync).</summary>
-    public void StartReconnectLoop() => StartReconnectLoop(0);
+    /// <summary>The connection-drop signal for the current connection (per-establishment),
+    /// awaited by the ONE supervisor loop — never lost: signaling before the wait works too.</summary>
+    private volatile TaskCompletionSource _dropped = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _loopStarted;
 
-    private void StartReconnectLoop(int startAttempt)
+    /// <summary>Background supervisor loop — started ONCE (after the first successful
+    /// ConnectAsync); it WAITS for each established connection to drop and reconnects with
+    /// backoff. (The first design re-connected every iteration unconditionally — a
+    /// ~5-connections/second churn that drowned the app; it must WAIT.)</summary>
+    public void StartReconnectLoop()
     {
+        if (Interlocked.Exchange(ref _loopStarted, 1) == 1) return;
         _ = Task.Run(async () =>
         {
-            var attempt = startAttempt;
+            var attempt = 0;
             var rng = Random.Shared;
             while (!_lifetime.IsCancellationRequested
                    && !_deliberatelyClosed
                    && !_authFailed
                    && _autoReconnect)
             {
+                // Wait for the CURRENT connection to drop (null ws = connect at once).
+                var dropped = _dropped;
+                if (_ws is not null)
+                {
+                    try
+                    {
+                        await dropped.Task.ConfigureAwait(false);
+                    }
+                    catch (ObjectDisposedException) { /* socket disposed → done */ break; }
+                }
+                if (_lifetime.IsCancellationRequested
+                    || _deliberatelyClosed
+                    || _authFailed
+                    || !_autoReconnect)
+                {
+                    break;
+                }
                 RaiseStatus(ConnStatus.Reconnecting);
-            var backoff = Math.Min(250L * (1L << Math.Min(attempt, 16)) + rng.Next(0, 250), 15_000L);
+                var backoff = Math.Min(250L * (1L << Math.Min(attempt, 16)) + rng.Next(0, 250), 15_000L);
                 try
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(backoff), _lifetime.Token).ConfigureAwait(false);
@@ -190,15 +216,18 @@ public sealed class FoundrySocket : IFdSocket, IAsyncDisposable
                     }
                     _ws = ws;
                     attempt = 0;
+                    _dropped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                     RaiseStatus(ConnStatus.Open);
                     StartReceiveLoop(ws);
                 }
                 catch (OperationCanceledException) { break; }
-                catch (Exception)
+                catch (Exception ex)
                 {
+                    SockLogSink.Line($"reconnect attempt {attempt} failed: {ex.GetType().Name}: {ex.Message}");
                     attempt++;
                 }
             }
+            SockLogSink.Line("supervisor loop exited");
         }, CancellationToken.None);
     }
 
@@ -408,6 +437,7 @@ public sealed class FoundrySocket : IFdSocket, IAsyncDisposable
                 if (ms.Length == 0) continue;
                 HandleFrame(Encoding.UTF8.GetString(ms.ToArray(), 0, (int)ms.Length));
             }
+            SockLogSink.Line($"receive loop ended normally (ws state={ws.State} closeStatus={ws.CloseStatus})");
             HandleServerCloseAsync(ws);
         }
         catch (OperationCanceledException)
@@ -418,8 +448,9 @@ public sealed class FoundrySocket : IFdSocket, IAsyncDisposable
         {
             // teardown
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            SockLogSink.Line($"receive loop died: {ex.GetType().Name}: {ex.Message}");
             HandleServerCloseAsync(ws);
         }
         finally
@@ -428,20 +459,21 @@ public sealed class FoundrySocket : IFdSocket, IAsyncDisposable
         }
     }
 
-    /// <summary>The socket dropped: fail pending requests, then hand off to the reconnect
-    /// loop (or report closed when reconnect is off/permanent). Only acts if this ws is
-    /// still the current one.</summary>
+    /// <summary>The socket dropped: fail pending requests, signal the supervisor loop
+    /// (it reconnects), and report closed when the loop can't help. Only acts if this ws
+    /// is still the current one.</summary>
     private void HandleServerCloseAsync(ClientWebSocket ws)
     {
         if (Interlocked.CompareExchange(ref _ws, null, ws) != ws) return;
         FailAllPending("connection lost", ErrorCodes.Internal);
         try { ws.Dispose(); } catch { /* gone */ }
+        SockLogSink.Line($"dropped (authFailed={_authFailed} autoReconnect={_autoReconnect})");
+        // Wake the supervisor loop (it owns reconnecting); signal even when it can't retry:
+        _dropped.TrySetResult();
         if (_authFailed || _deliberatelyClosed || !_autoReconnect || _lifetime.IsCancellationRequested)
         {
             RaiseStatus(ConnStatus.Closed);
-            return;
         }
-        StartReconnectLoop();
     }
 
     private void HandleFrame(string text)
@@ -563,6 +595,25 @@ public static class ConnStatus
     public const string Open = "open";
     public const string Reconnecting = "reconnecting";
     public const string Closed = "closed";
+}
+
+/// <summary>
+/// Env-gated socket diagnostics: FOUNDRY_SOCK_LOG=path appends one line per socket event
+/// (connect/reconnect/status/error). Silent when unset (production zero-logging).
+/// </summary>
+public static class SockLogSink
+{
+    private static readonly string? Path = Environment.GetEnvironmentVariable("FOUNDRY_SOCK_LOG");
+
+    public static void Line(string msg)
+    {
+        if (Path is not { Length: > 0 } file) return;
+        try
+        {
+            System.IO.File.AppendAllText(file, $"{DateTimeOffset.UtcNow:HH:mm:ss.fff} sock: {msg}{Environment.NewLine}");
+        }
+        catch { /* best-effort */ }
+    }
 }
 
 public static class BaseUrlNormalizer
