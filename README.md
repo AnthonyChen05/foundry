@@ -116,7 +116,7 @@ pnpm probe:ollama                  # automated real-provider check
 | Client | Where | What it is |
 |---|---|---|
 | Web | served by core at `/` (same origin) | SvelteKit 2 + Svelte 5 SPA: chat, run timeline, terminal (xterm.js), files, settings |
-| Windows | [`apps/desktop`](apps/desktop) (Tauri) | a thin native shell that loads the core's origin; supervises the local-sandbox runner |
+| Windows | [`apps/windows`](apps/windows) (WinUI 3 / .NET, ADR-019) | native client: setup screen (backend address), streaming chat, run timeline + gates, PTY terminal, files, providers, toasts; supervises the local-sandbox runner |
 | Android | [`apps/android`](apps/android) (Kotlin + Compose) | thin view over the same WS plane; fold-aware two-pane; ntfy push; sideload the APK from Releases |
 | Any OpenAI client | `/v1/*` | API-key Bearer; SSE streaming; tool calling |
 

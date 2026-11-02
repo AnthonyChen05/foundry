@@ -202,3 +202,44 @@ install that wants gVisor everywhere sets it for both. The daemon must have
 the runtime installed; with `runsc` absent from Docker Desktop, containers
 fail to START (fail closed — a misconfigured hardening knob degrades to an
 error, never to silently running runc).
+
+## ADR-019 — The Windows client is a native WinUI 3 app; the Tauri webview shell retires
+
+**Decision (owner directive, 2026-10-28):** the Windows exe becomes a standalone native
+client — its own UI compiled into the binary, talking REST/WS to the core at any reachable
+address (loopback/LAN/Tailscale). The core no longer supplies the desktop's UI. Stack:
+**WinUI 3 / Windows App SDK (C#, .NET 10)** in `apps/windows/` (solution `FoundryWindows`:
+App · Protocol · Sdk · Store · RunnerSup · Tests). Unpackaged self-contained
+(`WindowsPackageType=None` + `WindowsAppSDKSelfContained`), built and packaged with the
+dotnet CLI only (`winapp` CLI for the dev loop + `dotnet publish` for the artifact). The
+**Tauri shell (`apps/desktop`) is retired**: kept shippable until parity (v0.1.2 was the
+last release), removed from the release set when the native client ships, deleted later.
+
+**Why:** the owner asked for native ("rebuild the windows app to be native instead of web
+app"); a native client removes the "UI comes from the server" dependency (the backend is
+down → the desktop still opens), removes the WebView2/browser equivalence, and gives the
+desktop the same first-class-client status as Android (native screens, Windows toasts,
+own tooling). The server-served **web app remains** for browsers; the three-first-party-
+frontends story stays: Android (Kotlin/Compose), Windows (WinUI 3), self-hosted web.
+
+**Client architecture (mirrors the established clients, not new design):** same state
+shape as Android's AppStore (`apps/android` port lineage): one store, server-authoritative,
+WS events + refetch on `sys.resync`; `clientKind:"windows"`. The runner supervision is the
+desktop's contribution (ADR-015) — the C# supervisor replicates the Tauri one (entry
+resolution, node probe, backoff, CREATE_NO_WINDOW, runner.log); the executor WS plane
+stays in the `@foundry/runner` process, never in the app. Config: the SAME foundry.json
+shape the Tauri shell used (serverUrl + localSandbox), imported on first run; the session
+token stored in the OS credential locker (never in the JSON file).
+
+**WinUI-3 specifics worth keeping:** builds need no Visual Studio (dotnet SDK + the
+official templates; `winapp new/run/ui`); trimming is OFF for WinUI 3 (known-broken);
+string SymbolIcons need package identity — unpackaged apps use FontIcon glyph text or
+none; the UI must never rebuild XAML trees per store event (a WinRT finalizer context
+release vs `UpdateLayout` deadlock under flood) — rebuild-from-snapshot coalesced by a
+DispatcherQueueTimer, virtualized ListView with `ItemsUpdatingScrollMode=KeepLastItemInView`.
+Toast notifications degrade to the in-app list when identity is unavailable (unpackaged).
+
+**Status:** M0–M5 shipped and live-gated (commits 31f601d→d6940d2): transport + store
+battery 25/25 + live-core integration; setup/login/chat/gates/term/files/providers
+verified through `winapp ui` automation incl. a gated agent run and a runner-executed
+local container run.

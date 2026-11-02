@@ -162,3 +162,29 @@ Acceptance:
 
 Definition of done (per PR): tests pass, `pnpm smoke` green, no `any`, raw
 provider responses stored, docs updated if the contract changed.
+## P6 — Native Windows client (supersedes P4 #3) — DONE 2026-11-01
+
+P4 #3's "Tauri shell reusing the web app UI" was replaced per the owner's directive
+(ADR-019): the Windows client is a NATIVE WinUI 3 app in `apps/windows/`.
+
+Tasks (all shipped + gated; commits `31f601d`…`d6940d2`):
+1. M0: dotnet-CLI-only WinUI toolchain (winget .NET 10 SDK + `winapp` CLI; no Visual
+   Studio on the build machine); unpackaged self-contained publish.
+2. M1 transport: `Foundry.Protocol` (frames/wire/shapes + source-gen JSON) and
+   `Foundry.Sdk` (FoundrySocket = the sdk-ts socket port w/ cursors/resume/backoff + the
+   REST client), `Foundry.Store` (the Android AppStore state-machine port),
+   `Foundry.RunnerSup` (the Tauri supervisor port).
+3. M2 shell: Setup (backend address + /healthz) → Login → MainShell (NavigationView) with
+   the chat list + streaming drafts.
+4. M3: run timeline + gate cards + cancel + tool-policy + local-exec + runner supervision
+   + push-to-cloud.
+5. M4: PTY terminal (b64 stream, SGR colors, resize, line input; raw keystrokes = v1.1)
+   + the files browser (read/edit/write/mkdir/rm + recursive — the Android gaps closed).
+6. M5: settings (session/executor/catalog/providers w/ auto-pull display/password) +
+   Windows toasts (notify.push) w/ the in-app feed — the SetupPage re-entry affordance
+   ("Change server") lives there, mirroring the shell's setup-screen behavior.
+
+Acceptance (all passed): the unit battery (xunit, 25/25 × 3) + the live-core integration;
+the end-to-end UI battery via `winapp ui`: login → chat streaming → gated run
+(gate_request → approve → done, DB-verified) → a runner-executed local container run →
+term/files round-trips. M6 closeout = the release (v0.2.0) + the shell retirement.

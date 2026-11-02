@@ -14,7 +14,7 @@ namespace Foundry.Sdk;
 /// </summary>
 public sealed class FoundryRest : IFdRest, IDisposable
 {
-    public const string ClientVersion = "0.1.0";
+    public const string ClientVersion = "0.2.0";
     private static readonly JsonSerializerOptions WireOptions = WireRuntime.Options;
     private const string JsonMediaType = "application/json";
 

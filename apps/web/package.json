@@ -1,6 +1,6 @@
 {
   "name": "@foundry/web",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Foundry web client — thin view over the server-authoritative backend",

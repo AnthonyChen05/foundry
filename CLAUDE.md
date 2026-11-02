@@ -25,6 +25,9 @@ Owner: single self-hosted user (Anthony). Schema stays multi-user-ready.
   `packages/protocol`); generates JSON Schema for future client codegen
 - Drizzle ORM + better-sqlite3, SQLite in WAL mode; `sqlite-vec` extension for
   memory vectors
+- Android app: Kotlin 2 + Jetpack Compose (`apps/android`)
+- **Windows app: WinUI 3 / Windows App SDK, C# / .NET 10 (`apps/windows`)** — a native
+  client (ADR-019); builds with the dotnet CLI alone (`winapp` CLI for the dev loop)
 - Sandbox: driver interface (see docs/architecture.md §5).
   Driver #1 = **Open Terminal** container (`ghcr.io/open-webui/open-terminal`,
   MIT — REST exec, file API, PTY sessions, egress firewall).
@@ -41,7 +44,9 @@ foundry/
 ├── packages/sdk-ts/                # thin client SDK (WS + REST) for all frontends
 ├── apps/core/                      # THE monolith: gateway, providers, agent, sandbox, storage
 ├── apps/web/                       # (P4) SvelteKit web app
-└── apps/desktop/                   # (P4) Tauri Windows/desktop shell over the web app UI
+├── apps/windows/                   # (P6) Native WinUI 3 Windows client (ADR-019)
+├── apps/android/                   # (P4) Kotlin/Compose Android app
+└── apps/desktop/                   # (RETIRED — ADR-019) old Tauri webview shell (delete later)
 ```
 
 **Monolith-first. Do NOT split into microservices.** One Node process plus
