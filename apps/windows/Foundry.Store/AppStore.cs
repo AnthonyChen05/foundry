@@ -332,11 +332,13 @@ public sealed class AppStore
     public Task<List<FoundryRest.ProviderRow>> ListProvidersAsync() => Rest.ListProviders();
     public Task ChangePasswordAsync(string currentPassword, string newPassword) => Rest.ChangePassword(currentPassword, newPassword);
 
-    public async Task<string?> UpsertProviderAsync(string? id, string kind, string baseUrl, string? apiKey, IReadOnlyList<string>? models)
+    /// <summary>Upsert a provider; null models = server auto-pull. Returns the pull outcome
+    /// (the Android settings' result display): (id, pulled?, pullError).</summary>
+    public async Task<(string Id, bool? Pulled, string? PullError)> UpsertProviderAsync(string? id, string kind, string baseUrl, string? apiKey, IReadOnlyList<string>? models)
     {
-        var (upsertedId, _, _, _) = await Rest.UpsertProvider(id, kind, baseUrl, apiKey, models).ConfigureAwait(false);
+        var (upsertedId, _, pulled, pullError) = await Rest.UpsertProvider(id, kind, baseUrl, apiKey, models).ConfigureAwait(false);
         await RefreshModelsAsync().ConfigureAwait(false);
-        return upsertedId;
+        return (upsertedId, pulled, pullError);
     }
 
     public Task DeleteProviderAsync(string id) => Rest.DeleteProvider(id);

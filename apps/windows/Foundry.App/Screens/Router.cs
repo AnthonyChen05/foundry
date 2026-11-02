@@ -31,4 +31,13 @@ public static class Router
         _current = target.Name;
         frame.Navigate(target, s);
     }
+
+    /// <summary>The settings' explicit re-entry (Change server / configure runner):
+    /// navigate to setup at once; the next store state keeps it until Connect.</summary>
+    public static void ToSetup()
+    {
+        if (App.Window is not MainWindow main) return;
+        _current = "SetupPage";
+        main.Root.Navigate(typeof(SetupPage), null);
+    }
 }

@@ -51,6 +51,7 @@ public partial class App : Application
     {
         Host = new StoreHost(new SessionFile());
         DispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        Screens.Toasts.Register(); // toasts degrade to the in-app list when identity is unavailable
         Window = new MainWindow();
         Window.Closed += (_, _) => Host.Dispose(); // kill the runner + join on exit
         Window.Activate();
