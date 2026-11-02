@@ -4,8 +4,64 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Background="Transparent">
-    <!-- M4: real files browser. -->
-    <Grid Padding="24">
-        <TextBlock Text="Files — lands in M4 (list/read/mkdir/rm/write)." Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+    <!-- Files browser over workspace-relative paths (the chat-bound env or the default
+         one): list/navigate/read-edit/mkdir/rm (+recursive). Superset of Android (which
+         omits write + recursive), web parity. -->
+    <Grid RowSpacing="8" Padding="4">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button x:Name="UpBtn" Content="⬆ up" Click="OnUp" />
+            <Button x:Name="RootBtn" Content="root" Click="OnRoot" />
+            <TextBox x:Name="PathBox" MinWidth="380" KeyDown="OnPathKey" Header="" PlaceholderText="." />
+            <Button x:Name="RefreshBtn" Content="Refresh" Click="OnRefresh" />
+            <Button x:Name="MkdirBtn" Content="New folder" Click="OnMkdir" />
+        </StackPanel>
+        <TextBlock x:Name="StatusLine" Grid.Row="0" Margin="620,44,0,0" FontSize="11" FontFamily="Consolas"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+        <Grid Grid.Row="1" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition x:Name="PreviewCol" Width="380" />
+            </Grid.ColumnDefinitions>
+            <ListView x:Name="List" SelectionMode="Single" DoubleTapped="OnOpenEntry">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Padding="8,6" ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="Glyph" Text="{Binding Glyph}" />
+                            <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Grid.Column="2" Text="{Binding SizeText}" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                            <Button Grid.Column="3" Content="del" FontSize="11" Padding="8,2" Click="OnDeleteEntry" />
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+            <!-- preview/edit of the selected file -->
+            <Grid Grid.Column="1" x:Name="Preview" Visibility="Collapsed" RowSpacing="6">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock x:Name="PreviewName" Text="" FontWeight="SemiBold" />
+                    <Button x:Name="SaveBtn" Content="Save" Click="OnSave" />
+                </StackPanel>
+                <ScrollViewer Grid.Row="1" MaxHeight="40">
+                    <TextBlock x:Name="PreviewNote" Text="" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" TextWrapping="Wrap" />
+                </ScrollViewer>
+                <TextBox Grid.Row="2" x:Name="PreviewBody" AcceptsReturn="True" TextWrapping="NoWrap"
+                         FontFamily="Cascadia Mono,Consolas" FontSize="12" ScrollViewer.VerticalScrollBarVisibility="Auto" />
+            </Grid>
+        </Grid>
     </Grid>
 </Page>
