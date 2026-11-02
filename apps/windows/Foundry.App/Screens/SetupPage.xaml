@@ -20,7 +20,16 @@
             <TextBlock Text="Foundry" FontSize="24" FontWeight="SemiBold" />
             <TextBlock x:Name="Hint" Text="Your self-hosted Foundry core. Enter the backend's address — same origin serves the web app and API." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             <TextBox x:Name="UrlBox" Header="Server address" PlaceholderText="http://127.0.0.1:8787" />
-            <TextBlock x:Name="Status" MinHeight="20" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <CheckBox x:Name="LocalBox" Content="Run sandboxes locally (Docker Desktop)" Checked="OnLocalToggled" Unchecked="OnLocalToggled" />
+            <StackPanel x:Name="LocalFields" Visibility="Collapsed" Spacing="8">
+                <TextBox x:Name="LocalUser" Header="Runner owner username" PlaceholderText="admin" />
+                <PasswordBox x:Name="LocalPass" Header="Runner owner password" />
+                <TextBox x:Name="LocalCmd" Header="Runner command (advanced; blank = auto)" />
+                <TextBlock FontSize="11" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorTertiaryBrush}">
+                    Stored locally in foundry.json (plaintext, this machine). Requires Node 22+ and Docker Desktop on PATH.
+                </TextBlock>
+            </StackPanel>
+            <TextBlock x:Name="Status" MinHeight="20" TextWrapping="Wrap" />
             <Button x:Name="ConnectBtn" Content="Connect" Click="OnConnect" HorizontalAlignment="Left" Style="{StaticResource AccentButtonStyle}" />
         </StackPanel>
     </Grid>

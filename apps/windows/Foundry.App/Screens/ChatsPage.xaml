@@ -8,9 +8,10 @@
     mc:Ignorable="d"
     Background="Transparent">
 
-    <!-- Two-pane (list | detail) chat surface. Collections are INCREMENTAL (the VM diffs;
-         the ListView virtualizes and KeepLastItemInView follows the stream) — no wholesale
-         rebuilds, no manual layout calls from event handlers. -->
+    <!-- Three-pane chat surface: list | messages | run inspector (the web client's
+         right-panel pattern). The inspector = the active run: status, gates, timeline
+         (replay + live merged). Collections rebuild from the snapshot (the page
+         coalesces to ~one render per 60ms tick). -->
     <Page.Resources>
         <screen:LineSelector
             x:Key="LineSelector"
@@ -54,12 +55,27 @@
             <TextBlock HorizontalAlignment="Center" Text="{Binding Text}" Margin="0,40,0,0"
                        Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
         </DataTemplate>
+
+        <!-- inspector (timeline) row templates -->
+        <DataTemplate x:Key="RowBase">
+            <TextBlock FontFamily="Consolas" FontSize="11" Text="{Binding Text}" TextWrapping="Wrap"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        </DataTemplate>
+        <DataTemplate x:Key="RowErr">
+            <TextBlock FontFamily="Consolas" FontSize="11" Text="{Binding Text}" TextWrapping="Wrap"
+                       Foreground="#DD6E63" />
+        </DataTemplate>
+        <DataTemplate x:Key="RowLive">
+            <TextBlock FontFamily="Consolas" FontSize="11" Text="{Binding Text}" TextWrapping="Wrap"
+                       Foreground="#8DB087" />
+        </DataTemplate>
     </Page.Resources>
 
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="300" />
+            <ColumnDefinition Width="290" />
             <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="340" x:Name="InspectorCol" />
         </Grid.ColumnDefinitions>
 
         <!-- list pane -->
@@ -96,7 +112,7 @@
             </ListView>
         </Grid>
 
-        <!-- detail pane -->
+        <!-- messages pane -->
         <Grid Grid.Column="1" Margin="8,0,8,8" RowSpacing="8">
             <Grid.RowDefinitions>
                 <RowDefinition Height="*" />
@@ -107,7 +123,6 @@
                       ItemTemplateSelector="{StaticResource LineSelector}">
                 <ListView.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <!-- chat auto-follow: the LAST line stays in view as rows append -->
                         <ItemsStackPanel ItemsUpdatingScrollMode="KeepLastItemInView" />
                     </ItemsPanelTemplate>
                 </ListView.ItemsPanel>
@@ -131,11 +146,67 @@
                         Style="{StaticResource AccentButtonStyle}" IsEnabled="{x:Bind Vm.SendEnabled, Mode=OneWay}" />
             </Grid>
             <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10" Margin="8,6,8,0">
-                <ComboBox x:Name="ModelBox" MinWidth="240" ItemsSource="{x:Bind Vm.Models}" SelectionChanged="OnModelChanged" />
+                <ComboBox x:Name="ModelBox" MinWidth="220" ItemsSource="{x:Bind Vm.Models}" SelectionChanged="OnModelChanged" />
                 <ToggleSwitch x:Name="AgentSwitch" OnContent="agent" OffContent="plain" Toggled="OnAgentToggled" />
-                <TextBlock x:Name="ComposerHint" VerticalAlignment="Center" FontSize="12" Text="{x:Bind Vm.Hint, Mode=OneWay}"
-                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                <Button x:Name="PolicyBtn" Content="Tool policy" Click="OnPolicy">
+                    <Button.Flyout>
+                        <Flyout x:Name="PolicyFlyout">
+                            <StackPanel Spacing="8" Margin="4,4,4,8">
+                                <TextBlock Text="Agent tool policy" FontWeight="SemiBold" />
+                                <TextBlock Text="What the agent does without asking. Session/Always persist this conversation." FontSize="11" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock Text="shell" FontSize="12" Margin="0,4,0,0" />
+                                <ComboBox x:Name="PolicyShell" SelectedIndex="0" MinWidth="150">
+                                    <ComboBoxItem Content="ask" />
+                                    <ComboBoxItem Content="always" />
+                                    <ComboBoxItem Content="always (session)" />
+                                    <ComboBoxItem Content="deny" />
+                                </ComboBox>
+                                <TextBlock Text="write_file" FontSize="12" />
+                                <ComboBox x:Name="PolicyWrite" SelectedIndex="0" MinWidth="150">
+                                    <ComboBoxItem Content="ask" />
+                                    <ComboBoxItem Content="always" />
+                                    <ComboBoxItem Content="always (session)" />
+                                    <ComboBoxItem Content="deny" />
+                                </ComboBox>
+                                <TextBlock Text="read_file" FontSize="12" />
+                                <ComboBox x:Name="PolicyRead" SelectedIndex="1" MinWidth="150">
+                                    <ComboBoxItem Content="ask" />
+                                    <ComboBoxItem Content="always" />
+                                    <ComboBoxItem Content="always (session)" />
+                                    <ComboBoxItem Content="deny" />
+                                </ComboBox>
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+                <Button x:Name="LocBtn" Content="Executes: cloud" Click="OnLocation"
+                        IsEnabled="False"
+                        Margin="0,0,0,0" />
+                <Button x:Name="PushBtn" Content="Push to cloud" Click="OnPush" Visibility="Collapsed" />
             </StackPanel>
+        </Grid>
+
+        <!-- inspector pane (the active run) -->
+        <Grid Grid.Column="2" Margin="4,0,8,8" RowSpacing="6">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Grid ColumnSpacing="6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="RunTitle" Text="No run yet" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                <Button x:Name="CancelBtn" Grid.Column="1" Content="Cancel" Click="OnCancel" Visibility="Collapsed" />
+            </Grid>
+            <TextBlock x:Name="RunStatus" Grid.Row="1" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+            <StackPanel x:Name="GatesPanel" Grid.Row="2" Spacing="6" />
+            <ScrollViewer Grid.Row="3" Padding="0,4,0,0">
+                <ItemsControl x:Name="TimelineList" />
+            </ScrollViewer>
         </Grid>
     </Grid>
 </Page>

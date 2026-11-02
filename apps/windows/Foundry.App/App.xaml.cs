@@ -52,26 +52,63 @@ public partial class App : Application
         Host = new StoreHost(new SessionFile());
         DispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
         Window = new MainWindow();
+        Window.Closed += (_, _) => Host.Dispose(); // kill the runner + join on exit
         Window.Activate();
         Host.Store.StateChanged += OnStoreChanged;
         _ = Host.Store.BootAsync();
     }
 
-    private void OnStoreChanged(AppState s) => MarshalToUi(() => Screens.Router.OnState(Window, s));
+    private void OnStoreChanged(AppState s) => MarshalToUi(() =>
+    {
+        Screens.Router.OnState(Window, s);
+        if (s.Phase == "ready" && s.Conn == ConnStatus.Open)
+        {
+            Host.MaybeStartRunner(s.ServerUrl); // idempotent; no-op without local-sandbox creds
+        }
+    });
 }
 
-/// <summary>App-owned transports + store (one composition root).</summary>
-public sealed class StoreHost
+/// <summary>App-owned transports + store + the local-sandbox runner supervisor (ADR-015).</summary>
+public sealed class StoreHost : IDisposable
 {
     public AppStore Store { get; }
+    private readonly SessionFile _session;
+    private readonly Foundry.RunnerSup.RunnerSupervisor _runner = new();
+
+    /// <summary>The session file (setup/config reads + localSandbox save) for the screens.</summary>
+    public SessionFile Session => _session;
+
+    private int _runnerRequested;
 
     public StoreHost(IPersistedSession session)
     {
+        _session = (SessionFile)session;
         Store = new AppStore(
             url => new FoundrySocket(url, null),
             url => new FoundryRest(url),
             session,
             note => Toasts.Post(note)); // M5 wires real toasts; no-op until then
+    }
+
+    /// <summary>Spawn+supervise the runner when local-sandbox creds exist (idempotent;
+    /// the supervisor itself stays down when node/entry are missing — its log says so).
+    /// Callers: after a successful connect (the server URL is now known).</summary>
+    public void MaybeStartRunner(string serverUrl)
+    {
+        var local = _session.ReadLocal();
+        if (local is not { Enabled: true }) return;
+        if (Interlocked.Exchange(ref _runnerRequested, 1) == 1) return;
+        _runner.Start(new Foundry.RunnerSup.RunnerSpec(
+            serverUrl,
+            local.Username,
+            local.Password,
+            local.RunnerCommand,
+            Foundry.RunnerSup.AppDirs.RunnerLogPath()));
+    }
+
+    public void Dispose()
+    {
+        _runner.Dispose(); // kill the child; the store's socket dies with the process
     }
 }
 
@@ -96,7 +133,7 @@ public sealed class SessionFile : IPersistedSession
 
     public void Save(PersistedSession session)
     {
-        WriteMeta(new Meta(session.ServerUrl, session.Username, session.NtfyUrl, session.NtfyTopic));
+        WriteMeta(new Meta(session.ServerUrl, session.Username, session.NtfyUrl, session.NtfyTopic, ReadMeta()?.Local));
         WriteToken(session.Token);
     }
 
@@ -118,27 +155,14 @@ public sealed class SessionFile : IPersistedSession
     }
 
     // ---- the Tauri shell's config, imported best-effort (transition parity) ----
+    // (full import incl. localSandbox: TauriImportedMeta, called from ReadMeta)
 
-    public static string? TauriImportedUrl()
+    public sealed record LocalSandbox(string Username, string Password, string? RunnerCommand)
     {
-        try
-        {
-            var path = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "app.foundry.desktop", "foundry.json");
-            if (!System.IO.File.Exists(path)) return null;
-            return JsonDocument.Parse(System.IO.File.ReadAllText(path)).RootElement
-                .TryGetProperty("serverUrl", out var u) && u.ValueKind == JsonValueKind.String
-                ? u.GetString()
-                : null;
-        }
-        catch
-        {
-            return null;
-        }
+        public bool Enabled => Username.Length > 0 && Password.Length > 0;
     }
 
-    private sealed record Meta(string ServerUrl, string Username, string? NtfyUrl, string? NtfyTopic);
+    private sealed record Meta(string ServerUrl, string Username, string? NtfyUrl, string? NtfyTopic, LocalSandbox? Local);
 
     private Meta? ReadMeta()
     {
@@ -147,27 +171,79 @@ public sealed class SessionFile : IPersistedSession
             var path = Foundry.RunnerSup.AppDirs.ConfigPath();
             if (!System.IO.File.Exists(path))
             {
-                var imported = TauriImportedUrl();
+                var imported = TauriImportedMeta();
                 if (imported is not null)
                 {
-                    var fresh = new Meta(imported, "admin", null, null);
-                    WriteMeta(fresh);
-                    return fresh;
+                    WriteMeta(imported);
+                    return imported;
                 }
                 return null;
             }
             var el = JsonDocument.Parse(System.IO.File.ReadAllText(path)).RootElement;
+            LocalSandbox? local = null;
+            if (el.TryGetProperty("localSandbox", out var ls) && ls.ValueKind == JsonValueKind.Object)
+            {
+                var lsUser = ls.TryGetProperty("username", out var lu) && lu.ValueKind == JsonValueKind.String ? lu.GetString() ?? "" : "";
+                var lsPass = ls.TryGetProperty("password", out var lp) && lp.ValueKind == JsonValueKind.String ? lp.GetString() ?? "" : "";
+                if (lsUser.Length > 0 && lsPass.Length > 0)
+                {
+                    local = new LocalSandbox(lsUser, lsPass,
+                        ls.TryGetProperty("runnerCommand", out var rc) && rc.ValueKind == JsonValueKind.String ? rc.GetString() : null);
+                }
+            }
             return new Meta(
                 el.TryGetProperty("serverUrl", out var u) && u.ValueKind == JsonValueKind.String ? u.GetString() ?? "" : "",
                 el.TryGetProperty("username", out var un) && un.ValueKind == JsonValueKind.String ? un.GetString() ?? "" : "",
                 el.TryGetProperty("ntfyUrl", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null,
-                el.TryGetProperty("ntfyTopic", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null);
+                el.TryGetProperty("ntfyTopic", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null,
+                local);
         }
         catch
         {
             return null;
         }
     }
+
+    /// <summary>Full Tauri-shell import (serverUrl AND its localSandbox, when present).</summary>
+    private static Meta? TauriImportedMeta()
+    {
+        try
+        {
+            var path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "app.foundry.desktop", "foundry.json");
+            if (!System.IO.File.Exists(path)) return null;
+            var el = JsonDocument.Parse(System.IO.File.ReadAllText(path)).RootElement;
+            var server = el.TryGetProperty("serverUrl", out var u) && u.ValueKind == JsonValueKind.String ? u.GetString() : null;
+            if (server is null) return null;
+            LocalSandbox? local = null;
+            if (el.TryGetProperty("localSandbox", out var ls) && ls.ValueKind == JsonValueKind.Object)
+            {
+                var lsUser = ls.TryGetProperty("username", out var lu) && lu.ValueKind == JsonValueKind.String ? lu.GetString() ?? "" : "";
+                var lsPass = ls.TryGetProperty("password", out var lp) && lp.ValueKind == JsonValueKind.String ? lp.GetString() ?? "" : "";
+                if (lsUser.Length > 0 && lsPass.Length > 0)
+                {
+                    local = new LocalSandbox(lsUser, lsPass,
+                        ls.TryGetProperty("runnerCommand", out var rc) && rc.ValueKind == JsonValueKind.String ? rc.GetString() : null);
+                }
+            }
+            return new Meta(server.TrimEnd('/'), "admin", null, null, local);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The runner's credentials change (setup page / settings): merge + rewrite.</summary>
+    public void SaveLocal(LocalSandbox? local)
+    {
+        var meta = ReadMeta();
+        if (meta is null) return;
+        WriteMeta(new Meta(meta.ServerUrl, meta.Username, meta.NtfyUrl, meta.NtfyTopic, local));
+    }
+
+    public LocalSandbox? ReadLocal() => ReadMeta()?.Local;
 
     private void WriteMeta(Meta meta)
     {
